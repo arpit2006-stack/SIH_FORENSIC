@@ -1,0 +1,14 @@
+# Dependencies (any folder)
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+
+# Environment variables
+.env
+.env.*
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db
