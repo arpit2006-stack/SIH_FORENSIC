@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* High-end Dark mode palette (RGB values for Tailwind opacity support) */
+  --bg-primary: 5 5 5; /* #050505 Deep black */
+  --bg-surface: 15 15 19; /* #0f0f13 Tinted dark surface */
+  --text-primary: 248 250 252; /* #f8fafc */
+  --text-secondary: 148 163 184; /* #94a3b8 */
+  
+  --accent-danger: 244 63 94;   /* #f43f5e */
+  --accent-safe: 20 184 166;     /* #14b8a6 */
+  --accent-success: 16 185 129;  /* #10b981 */
+  --accent-warning: 245 158 11;  /* #f59e0b */
+  --accent-neutral: 139 92 246;  /* #8b5cf6 */
+}
+
+body {
+  color: rgb(var(--text-primary));
+  background-color: rgb(var(--bg-primary));
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  /* Elite cyber-grid background */
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: center top;
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply backdrop-blur-md border border-white/10 shadow-2xl;
+    background-color: rgb(var(--bg-surface) / 0.8);
+  }
+  
+  .glow-danger {
+    box-shadow: 0 0 20px -5px rgba(244, 63, 94, 0.4);
+  }
+  
+  .glow-safe {
+    box-shadow: 0 0 20px -5px rgba(20, 184, 166, 0.4);
+  }
+  
+  .glow-success {
+    box-shadow: 0 0 20px -5px rgba(16, 185, 129, 0.4);
+  }
+
+  .text-glow-danger {
+    text-shadow: 0 0 10px rgba(244, 63, 94, 0.6);
+  }
+  
+  .text-glow-safe {
+    text-shadow: 0 0 10px rgba(20, 184, 166, 0.6);
+  }
+
+  .text-glow-success {
+    text-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+  }
+
+  .animate-pulse-slow {
+    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+}
