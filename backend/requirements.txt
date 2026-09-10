@@ -1,0 +1,30 @@
+# Forensiwipe AI Engine — pinned for air-gapped install (Python 3.12–3.14, x86_64).
+# Build a wheelhouse online, then install offline:
+#   pip download -r requirements.txt -d wheelhouse/
+#   pip install --no-index --find-links=wheelhouse/ -r requirements.txt
+
+# Core numerics
+numpy==2.4.4
+scipy==1.17.1
+
+# Deep learning (training) + ONNX export
+torch==2.13.0
+torchvision==0.28.0
+onnx==1.22.0
+
+# Runtime inference. CPU build is mandatory; GPU build is optional and
+# only activates when CUDA/cuDNN are present (see engine/pretrain_utils.py).
+onnxruntime==1.29.0
+onnxruntime-gpu==1.29.0; platform_system != "Darwin"
+
+# Process priority boost (Windows hybrid-CPU scheduler workaround) + memory stats
+psutil==7.2.2
+
+# Pattern matching / reporting / explainability
+yara-python==4.5.4
+reportlab==5.0.1
+shap==0.52.0
+captum==0.9.0
+
+# Local LLM (GGUF). Prebuilt CPU wheel; rebuild with CMAKE_ARGS="-DGGML_CUDA=on" for GPU offload.
+llama-cpp-python==0.3.35

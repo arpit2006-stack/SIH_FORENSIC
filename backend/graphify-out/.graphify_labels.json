@@ -1,0 +1,15 @@
+{
+  "0": "pretrain_utils.py",
+  "1": ".sample",
+  "2": "ndarray",
+  "3": "Product Requirements Document (PRD)",
+  "4": "triage_scorer.py",
+  "5": "SyntheticFragmentCorpus",
+  "6": "CLAUDE.md",
+  "7": "__init__.py",
+  "8": "FastBlockTriage",
+  "9": "get_optimal_execution_providers",
+  "10": ".shuffle_fragments",
+  "11": ".insert_bytes",
+  "12": ".zero_fill"
+}
