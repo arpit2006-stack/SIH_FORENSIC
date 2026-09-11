@@ -20,6 +20,9 @@ onnxruntime-gpu==1.29.0; platform_system != "Darwin"
 # Process priority boost (Windows hybrid-CPU scheduler workaround) + memory stats
 psutil==7.2.2
 
+# Image decoding for JPEG structural validation and fixtures
+pillow==12.1.1
+
 # Pattern matching / reporting / explainability
 yara-python==4.5.4
 reportlab==5.0.1
