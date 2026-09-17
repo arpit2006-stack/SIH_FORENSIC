@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession, Drive } from '@/context/SessionContext';
+import { apiClient, Device } from '@/lib/apiClient';
 
-const MOCK_DRIVES: Drive[] = [
-  { serial: 'SN-9340203495', model: 'Samsung 980 PRO', capacity: '1.0 TB', interfaceType: 'NVMe', health: '98%', temp: '34°C', busType: 'PCIe 4.0 x4' },
-  { serial: 'WD-WCC6Y6XNXE44', model: 'WD Blue 3D NAND', capacity: '500 GB', interfaceType: 'SATA SSD', health: '82%', temp: '29°C', busType: 'SATA III' },
-  { serial: 'ST-9X0023423A', model: 'Seagate Barracuda', capacity: '2.0 TB', interfaceType: 'SATA HDD', health: '100%', temp: '41°C', busType: 'SATA III' },
+const FALLBACK_DRIVES: Drive[] = [
+  { serial: 'SN-9340203495', model: 'Samsung 980 PRO (Mock NVMe)', capacity: '1.0 TB', interfaceType: 'NVMe', health: '98%', temp: '34°C', busType: 'PCIe 4.0 x4', devicePath: '/dev/mock_nvme0n1' },
+  { serial: 'WD-WCC6Y6XNXE44', model: 'WD Blue 3D NAND (Mock SATA)', capacity: '500 GB', interfaceType: 'SATA SSD', health: '82%', temp: '29°C', busType: 'SATA III', devicePath: '/dev/mock_sda' },
+  { serial: 'ST-9X0023423A', model: 'Seagate Barracuda (Mock HDD)', capacity: '2.0 TB', interfaceType: 'SATA HDD', health: '100%', temp: '41°C', busType: 'SATA III', devicePath: '/dev/mock_sdb' },
 ];
 
 export default function DriveSelectionPage() {
@@ -20,16 +21,47 @@ export default function DriveSelectionPage() {
     setSessionMode 
   } = useSession();
   
-  const [drives, setDrives] = useState<Drive[]>(MOCK_DRIVES);
+  const [drives, setDrives] = useState<Drive[]>(FALLBACK_DRIVES);
   const [localSelectedDrive, setLocalSelectedDrive] = useState<Drive | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [backendOnline, setBackendOnline] = useState<boolean>(false);
   
-  React.useEffect(() => {
+  const fetchDrives = async () => {
+    setIsLoading(true);
+    try {
+      const resp = await apiClient.listDevices(true);
+      if (resp?.devices && resp.devices.length > 0) {
+        const mapped: Drive[] = resp.devices.map((d: Device) => ({
+          serial: d.serial || `DEV-${d.devicePath}`,
+          model: d.model || 'Generic Storage Target',
+          capacity: d.capacityFormatted || '512 GB',
+          interfaceType: d.storageType || 'Block Device',
+          health: d.health || '100%',
+          temp: d.temp || '32°C',
+          busType: d.busType || 'NVMe/SATA',
+          devicePath: d.devicePath,
+        }));
+        setDrives(mapped);
+        setBackendOnline(true);
+      } else {
+        setDrives(FALLBACK_DRIVES);
+      }
+    } catch {
+      setDrives(FALLBACK_DRIVES);
+      setBackendOnline(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
     setSessionMode('neutral');
     setSelectedDrive(null);
+    fetchDrives();
   }, [setSessionMode, setSelectedDrive]);
 
   const handleRefresh = () => {
-    setDrives([...MOCK_DRIVES]);
+    fetchDrives();
   };
 
   const handleSelectDrive = () => {
@@ -43,9 +75,17 @@ export default function DriveSelectionPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-10 animate-in fade-in duration-500">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight mb-2 text-slate-800">Initialize Session</h2>
-        <p className="text-slate-500 text-lg">Define telemetry identifiers and select target media.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight mb-2 text-slate-800">Initialize Session</h2>
+          <p className="text-slate-500 text-lg">Define telemetry identifiers and select target media.</p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <span className={`w-3 h-3 rounded-full ${backendOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`}></span>
+          <span className="text-xs font-mono text-slate-500 font-semibold uppercase tracking-wider">
+            {backendOnline ? 'IPC Daemon: Connected (127.0.0.1:8000)' : 'IPC Daemon: Standalone Mode'}
+          </span>
+        </div>
       </div>
 
       {/* Expanded Form Area */}
@@ -73,7 +113,7 @@ export default function DriveSelectionPage() {
               type="text"
               value={investigatorName}
               onChange={(e) => setInvestigatorName(e.target.value)}
-              placeholder="e.g. John Doe"
+              placeholder="e.g. Insp. Rajesh Varma"
               className="w-full px-4 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-slate-800 shadow-sm"
             />
           </div>
@@ -88,9 +128,9 @@ export default function DriveSelectionPage() {
               className="w-full px-4 py-2 bg-white border border-slate-300 rounded-md focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 text-slate-800 shadow-sm appearance-none"
             >
               <option>Local Drive</option>
-              <option>Network Share</option>
-              <option>Image File (.E01 / .DD)</option>
-              <option>Cloud Bucket</option>
+              <option>Forensic Image (.RAW / .DD / .E01)</option>
+              <option>Hardware Write-Blocked Bus</option>
+              <option>Synthetic Demo Corpus</option>
             </select>
           </div>
         </div>
@@ -102,9 +142,10 @@ export default function DriveSelectionPage() {
           <h3 className="text-xl font-semibold tracking-tight text-slate-800">Detected Interfaces</h3>
           <button 
             onClick={handleRefresh}
-            className="px-4 py-2 text-sm font-medium bg-slate-100 text-slate-700 border border-slate-200 rounded-md hover:bg-slate-200 transition-all active:scale-95 shadow-sm"
+            disabled={isLoading}
+            className="px-4 py-2 text-sm font-medium bg-slate-100 text-slate-700 border border-slate-200 rounded-md hover:bg-slate-200 transition-all active:scale-95 shadow-sm flex items-center space-x-2"
           >
-            Rescan Bus
+            <span>{isLoading ? 'Scanning Bus...' : 'Rescan Bus'}</span>
           </button>
         </div>
 
@@ -132,7 +173,10 @@ export default function DriveSelectionPage() {
                         ? 'bg-slate-50 border-l-4 border-l-slate-800' 
                         : 'hover:bg-slate-50 border-l-4 border-l-transparent'}`}
                   >
-                    <td className="px-6 py-4 font-semibold text-slate-800">{drive.model}</td>
+                    <td className="px-6 py-4 font-semibold text-slate-800">
+                      <div>{drive.model}</div>
+                      {drive.devicePath && <div className="text-xs font-mono text-slate-400">{drive.devicePath}</div>}
+                    </td>
                     <td className="px-6 py-4 font-mono text-sm text-slate-500">{drive.serial}</td>
                     <td className="px-6 py-4 font-mono text-sm text-slate-800">{drive.capacity}</td>
                     <td className="px-6 py-4 text-sm text-slate-600">
@@ -141,7 +185,7 @@ export default function DriveSelectionPage() {
                     <td className="px-6 py-4 text-sm text-slate-600 font-mono text-xs">{drive.busType}</td>
                     <td className="px-6 py-4">
                       <span className="px-3 py-1 text-xs font-semibold tracking-wide bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md">
-                        CLEAN
+                        ONLINE
                       </span>
                     </td>
                   </tr>
