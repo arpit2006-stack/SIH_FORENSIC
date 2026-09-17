@@ -12,3 +12,15 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# Python & testing caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+**/.pytest_cache/
+
+# Local Generated Reports (Output)
+backend/*.pdf
+backend/graphify-out/
