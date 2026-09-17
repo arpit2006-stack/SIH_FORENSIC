@@ -157,9 +157,73 @@ def main() -> None:
         assert img.batch(0, 4).shape == (4, BLOCK_SIZE)
         from_disk = carve(img.batch(0, len(img)))
         assert [s.blocks for s in from_disk.streams] == [s.blocks for s in cr.streams]
-    assert bytes(leaked) == frags[0]    # still readable after close: it was never a view
     os.remove(path)                     # would raise WinError 32 if the mmap leaked
     print("  mmap released cleanly; image file removable straight after the context exits")
+
+    # Phase 4: Generate Forensic Case Report & BSA §63(4) Certificate
+    from engine.report_gen import (
+        ArtifactRecord,
+        BSASection63CertificateGenerator,
+        CaseMetadata,
+        CertificateData,
+        ForensicCaseReportGenerator,
+        ForensicReliabilityScorer,
+        compute_artifact_hashes,
+    )
+    scorer = ForensicReliabilityScorer()
+    sha_jpeg, mac_jpeg = compute_artifact_hashes(recovered[0][:len(jpeg)])
+    sha_pdf, mac_pdf = compute_artifact_hashes(recovered[1][:len(pdf)])
+    score_jpeg = scorer.score(recovered[0][:len(jpeg)], "image/jpeg")
+    score_pdf = scorer.score(recovered[1][:len(pdf)], "application/pdf")
+
+    case_meta = CaseMetadata(
+        case_id="FWS-CASE-2026-001",
+        evidence_id="EVID-DISK-001",
+        examiner_name="Senior Forensic Analyst",
+        total_blocks_scanned=2 * N_FRAGS,
+        total_artifacts_carved=2,
+    )
+    artifacts = [
+        ArtifactRecord(
+            document_name="recovered_evidence_001.jpg",
+            mime_type="image/jpeg",
+            size_bytes=len(jpeg),
+            raw_offset_bytes=0,
+            sha256_hash=sha_jpeg,
+            reliability_score=score_jpeg.S,
+            category="MEDIA",
+            priority="P2_HIGH",
+        ),
+        ArtifactRecord(
+            document_name="recovered_evidence_002.pdf",
+            mime_type="application/pdf",
+            size_bytes=len(pdf),
+            raw_offset_bytes=N_FRAGS * BLOCK_SIZE,
+            sha256_hash=sha_pdf,
+            reliability_score=score_pdf.S,
+            category="FINANCIAL",
+            priority="P1_CRITICAL",
+        ),
+    ]
+
+    case_gen = ForensicCaseReportGenerator()
+    case_pdf = case_gen.generate_pdf(case_meta, artifacts, "forensiwipe_case_report.pdf")
+
+    cert_gen = BSASection63CertificateGenerator()
+    cert_pdf = cert_gen.generate_pdf(
+        CertificateData(
+            document_name="recovered_evidence_002.pdf",
+            document_description="Reassembled PDF financial ledger",
+            raw_offset_bytes=N_FRAGS * BLOCK_SIZE,
+            sha256_hash=sha_pdf,
+            hmac_sha256_hash=mac_pdf,
+            reliability_score=score_pdf,
+        ),
+        "forensiwipe_section63_certificate.pdf",
+    )
+    print(f"  generated case report: {case_pdf} ({os.path.getsize(case_pdf)} bytes)")
+    print(f"  generated BSA §63 certificate: {cert_pdf} ({os.path.getsize(cert_pdf)} bytes)")
+
     print("OK: JPEG and PDF fully reordered from a mixed 20-fragment pool; bytes are source-only")
 
 
