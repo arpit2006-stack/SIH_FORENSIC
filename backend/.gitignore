@@ -1,0 +1,214 @@
+# =============================================================================
+# Forensiwipe AI Forensic Engine — .gitignore
+# Project: Project Forensiwipe (Air-Gapped Forensic Carving & Evidence Triage)
+# Specification Reference: PRD.md (v4)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. Forensic Evidence & Raw Disk Images (CRITICAL - Evidentiary Integrity)
+# PRD Sec 1 & Sec 2: Raw evidence must NEVER be committed to version control.
+# Leaking evidence breaches chain of custody, privacy laws (DPDP/BSA), and exposes
+# suspect/victim PII, confidential media, and raw disk blocks.
+# -----------------------------------------------------------------------------
+*.raw
+*.dd
+*.img
+*.bin
+*.001
+*.dmg
+*.iso
+
+# Expert Witness Format (EWF / EnCase) & Advanced Forensic Format (AFF)
+*.E01
+*.Ex01
+*.e01
+*.L01
+*.aff
+*.aff4
+
+# Virtual Machine Disks & Container Images
+*.vmdk
+*.vdi
+*.vhd
+*.vhdx
+*.qcow2
+
+# Memory & Crash Dumps
+*.dmp
+*.dump
+*.mem
+*.crash
+
+# Temporary forensic test images & mmap probes (e.g. forensiwipe_mmap_probe.bin)
+*mmap_probe*
+*_test_image*
+test_images/
+fixtures/evidence/
+
+# -----------------------------------------------------------------------------
+# 2. Recovered / Carved Evidence Artifacts (Sensitive Case Material)
+# PRD FR2.0 - FR2.3: Carved byte streams, reassembled files, extracted payloads.
+# -----------------------------------------------------------------------------
+carved/
+carved_output/
+extracted/
+recovered/
+artifacts/
+output/
+exports/
+*.carved
+*.recovered
+
+# -----------------------------------------------------------------------------
+# 3. BSA 2023 Section 63 Digital Signatures, Keys & Certificates (Tamper Risk)
+# PRD FR4.3: Legal admissibility certificates with dual-signature verification.
+# Examiner & expert private keys/certificates must NEVER enter Git.
+# -----------------------------------------------------------------------------
+*.key
+*.pem
+*.pkcs12
+*.pfx
+*.p12
+*.priv
+*.sig
+*.signature
+*.asc
+*.crt
+*.cert
+*.cer
+keys/
+certs/
+credentials/
+secrets/
+
+# -----------------------------------------------------------------------------
+# 4. Forensic Triage Reports & Extracted PII / Financial Data (Privacy Risk)
+# PRD FR3.4 (Aadhaar, PAN, card numbers) & FR4.2/FR4.5 (Evidence JSON/PDF reports).
+# -----------------------------------------------------------------------------
+reports/
+triage_reports/
+triage_out/
+report_*.pdf
+evidence_*.json
+triage_*.json
+*.pdf
+*.csv
+*.xlsx
+
+# -----------------------------------------------------------------------------
+# 5. Heavy AI/ML Model Weights, Checkpoints & GGUF LLMs (PRD Sec 2)
+# The air-gapped system loads models locally from models/ (<=3B parameter GGUF).
+# Large binaries (GGUF, PyTorch checkpoints, SafeTensors) must not bloat Git.
+# -----------------------------------------------------------------------------
+models/*.gguf
+models/*.bin
+models/*.safetensors
+models/*.pt
+models/*.pth
+models/*.ckpt
+*.gguf
+*.safetensors
+*.ckpt
+
+# Locally generated/exported ONNX model weights (can be re-trained on synthetic corpus)
+models/*.onnx
+!models/.gitkeep
+
+# -----------------------------------------------------------------------------
+# 6. Local Vector Database & Semantic Embeddings (ChromaDB / SQLite)
+# PRD FR3.1: Air-gapped persistent vector store indexing evidence chunks.
+# -----------------------------------------------------------------------------
+chroma/
+chromadb/
+.chroma/
+vector_store/
+*.sqlite3
+*.db
+!tests/*.db
+
+# -----------------------------------------------------------------------------
+# 7. Offline Air-Gapped Dependency Wheelhouse
+# requirements.txt: "pip download -r requirements.txt -d wheelhouse/"
+# -----------------------------------------------------------------------------
+wheelhouse/
+*.whl
+
+# -----------------------------------------------------------------------------
+# 8. Explainability & Attribution Caches
+# PRD FR1.5 (SHAP vectors) & FR2.4 (Captum Grad-CAM heatmaps).
+# -----------------------------------------------------------------------------
+shap_cache/
+explainability_out/
+*.shap
+
+# -----------------------------------------------------------------------------
+# 9. Python Runtime, Bytecode & Virtual Environments
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.env.*
+!.env.example
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# -----------------------------------------------------------------------------
+# 10. Tool Caches & Intermediate Workstation Files
+# -----------------------------------------------------------------------------
+graphify-out/cache/
+.remember/tmp/
+.remember/logs/
+
+# -----------------------------------------------------------------------------
+# 11. OS & IDE Specific Files
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+*.lock
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
