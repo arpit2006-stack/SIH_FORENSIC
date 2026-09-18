@@ -23,4 +23,6 @@ __pycache__/
 
 # Local Generated Reports (Output)
 backend/*.pdf
-backend/graphify-out/
+backend/graphify-out/
+
+recovered_evidence/
