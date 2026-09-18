@@ -1,7 +1,11 @@
 """Tests for Secure File and Folder Eraser (PS Req 2)."""
 
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# pyrefly: ignore [missing-import]
 from sanitization.file_eraser import SecureFileEraser
 
 

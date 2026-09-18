@@ -16,7 +16,7 @@ import math
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -85,7 +85,7 @@ _P_FATAL = (0.99, 0.01)      # decisive: a violation means bytes are missing or 
 
 
 def _jpeg_tests(d: bytes) -> list:
-    t = [(d[:3] == b"\xff\xd8\xff", *_P_HEADER)]
+    t: list[tuple[Any, ...]] = [(d[:3] == b"\xff\xd8\xff", *_P_HEADER)]
     # Walk marker segments to SOS.
     pos, ok, sos = 2, False, -1
     for _ in range(64):
@@ -120,7 +120,7 @@ def _jpeg_tests(d: bytes) -> list:
 
 
 def _pdf_tests(d: bytes) -> list:
-    t = [(d.startswith(b"%PDF-"), *_P_HEADER)]
+    t: list[tuple[Any, ...]] = [(d.startswith(b"%PDF-"), *_P_HEADER)]
     n_obj, n_endobj = d.count(b" obj"), d.count(b"endobj")
     n_str, n_endstr = d.count(b"stream"), d.count(b"endstream")
     t.append((n_obj == n_endobj, 0.95, 0.2))
@@ -140,7 +140,7 @@ def _pdf_tests(d: bytes) -> list:
 
 
 def _zip_tests(d: bytes) -> list:
-    t = [(d.startswith(b"PK\x03\x04"), *_P_HEADER)]
+    t: list[tuple[Any, ...]] = [(d.startswith(b"PK\x03\x04"), *_P_HEADER)]
     pos, hops, good = 0, 0, 0
     while d[pos:pos + 4] == b"PK\x03\x04" and pos + 30 <= len(d) and hops < 10_000:
         csize = int.from_bytes(d[pos + 18:pos + 22], "little")
@@ -381,6 +381,8 @@ class PdfContext:
             if i < 0 or not re.match(rb"xref\s+\d+\s+\d+", f[i:i + 32]):
                 continue
             m = re.match(rb"xref\s+(\d+)\s+(\d+)\s*", f[i:i + 40])
+            if not m:
+                continue
             first, count = int(m.group(1)), int(m.group(2))
             body = f[i + m.end():]
             offsets = {}
@@ -661,7 +663,9 @@ class SiameseAdjacency:
     def affinity_matrix(self, blocks: list[bytes]) -> np.ndarray:
         """M[i, j] = P(block j directly follows block i). Diagonal is 0."""
         tails, heads = self._windows(blocks)
-        _, et, eh = self.session.run(None, {"tail": tails, "head": heads})
+        outputs = self.session.run(None, {"tail": tails, "head": heads})
+        et = np.asarray(outputs[1])
+        eh = np.asarray(outputs[2])
         cos = et @ eh.T
         m = 1.0 / (1.0 + np.exp(-(self.scale * cos + self.bias)))
         np.fill_diagonal(m, 0.0)
@@ -669,7 +673,8 @@ class SiameseAdjacency:
 
     def predict_pair(self, a: bytes, b: bytes) -> float:
         tails, heads = self._windows([a, b])
-        p, _, _ = self.session.run(None, {"tail": tails[:1], "head": heads[1:2]})
+        outputs = self.session.run(None, {"tail": tails[:1], "head": heads[1:2]})
+        p = np.asarray(outputs[0])
         return float(p[0])
 
 

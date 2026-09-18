@@ -90,6 +90,27 @@ export default function RecoveryResultsPage() {
         </div>
       </div>
 
+      {/* Evidence Directory Notice Banner */}
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-sm">
+        <div className="flex items-center space-x-3 text-emerald-900">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+          <div>
+            <span className="font-bold">Extracted Artifacts Saved to Evidence Directory:</span>{" "}
+            <code className="font-mono text-xs bg-emerald-100 px-2 py-0.5 rounded text-emerald-900 font-semibold">
+              recovered_evidence/
+            </code>
+            <p className="text-xs text-emerald-700 mt-0.5">
+              Extracted from source storage sectors and certified under Section 63 BSA custody log.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center space-x-2">
+          <span className="text-xs font-mono text-emerald-800 font-bold bg-emerald-200/70 px-3 py-1 rounded-full border border-emerald-300">
+            {files.length} Recovered Files
+          </span>
+        </div>
+      </div>
+
       {/* Table of Carved Files */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
         <table className="w-full text-left border-collapse">
@@ -100,12 +121,14 @@ export default function RecoveryResultsPage() {
               <th className="px-6 py-4">Carved Size</th>
               <th className="px-6 py-4">Reliability Score (S)</th>
               <th className="px-6 py-4">Triage Priority</th>
-              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4">Saved File</th>
+              <th className="px-6 py-4 text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {files.map((file) => {
               const isSel = selectedFile?.file_id === file.file_id;
+              const fname = file.filename || `${file.file_id.toLowerCase()}.${file.mime.split('/')[1] === 'jpeg' ? 'jpg' : file.mime.split('/')[1]}`;
               return (
                 <tr
                   key={file.file_id}
@@ -132,10 +155,20 @@ export default function RecoveryResultsPage() {
                       {file.triage_priority}
                     </span>
                   </td>
-                  <td className="px-6 py-4">
-                    <span className="px-2.5 py-1 text-xs font-semibold rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      {file.is_closed ? 'REASSEMBLED' : 'ORPHAN RESOLVED'}
-                    </span>
+                  <td className="px-6 py-4 font-mono text-xs text-slate-600">
+                    <span className="bg-slate-100 px-2 py-1 rounded border border-slate-200">{fname}</span>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <a
+                      href={`http://127.0.0.1:8000/api/carving/download?file=${fname}`}
+                      download={fname}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center space-x-1 px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded transition"
+                      title="Download file"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download</span>
+                    </a>
                   </td>
                 </tr>
               );
@@ -173,10 +206,27 @@ export default function RecoveryResultsPage() {
             </div>
           </div>
 
-          <div>
-            <div className="text-xs uppercase font-semibold text-slate-500 mb-1">SHA-256 Evidential Hash:</div>
-            <div className="font-mono text-xs bg-slate-50 p-2.5 rounded border border-slate-200 text-slate-700 break-all">
-              {selectedFile.sha256}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs uppercase font-semibold text-slate-500 mb-1">SHA-256 Evidential Hash:</div>
+              <div className="font-mono text-xs bg-slate-50 p-2.5 rounded border border-slate-200 text-slate-700 break-all">
+                {selectedFile.sha256}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs uppercase font-semibold text-slate-500 mb-1">Saved Evidence Path:</div>
+              <div className="font-mono text-xs bg-slate-50 p-2.5 rounded border border-slate-200 text-slate-700 break-all flex items-center justify-between">
+                <span>{selectedFile.saved_path || `recovered_evidence/${selectedFile.filename || selectedFile.file_id}`}</span>
+                {selectedFile.filename && (
+                  <a
+                    href={`http://127.0.0.1:8000/api/carving/download?file=${selectedFile.filename}`}
+                    download={selectedFile.filename}
+                    className="ml-2 px-2 py-1 bg-emerald-600 text-white rounded text-xs font-sans font-semibold hover:bg-emerald-700 flex-shrink-0"
+                  >
+                    Download
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>

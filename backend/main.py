@@ -14,6 +14,7 @@ import json
 import sys
 import os
 import urllib.parse
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -82,7 +83,28 @@ class UnifiedForensicHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # 3. Carving route dispatch
+        # 3. Carving route dispatch & Evidence download
+        if clean_path.startswith("/api/carving/download"):
+            query = urllib.parse.parse_qs(parsed.query)
+            filename = query.get("file", [""])[0]
+            if not filename and clean_path != "/api/carving/download":
+                filename = clean_path.split("/")[-1]
+            out_dir = (Path(BASE_DIR).parent / "recovered_evidence").resolve()
+            target_file = (out_dir / filename).resolve()
+            if filename and target_file.is_file() and str(target_file).startswith(str(out_dir)):
+                file_bytes = target_file.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Length", str(len(file_bytes)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(file_bytes)
+                return
+            else:
+                self._send_json(404, {"status": "ERROR", "message": f"Artifact '{filename}' not found in recovered evidence"})
+                return
+
         if clean_path.startswith("/api/carving"):
             status, resp = self.carving_router.handle_request("GET", self.path)
             self._send_json(status, resp)

@@ -5,11 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useSession, Drive } from '@/context/SessionContext';
 import { apiClient, Device } from '@/lib/apiClient';
 
-const FALLBACK_DRIVES: Drive[] = [
-  { serial: 'SN-9340203495', model: 'Samsung 980 PRO (Mock NVMe)', capacity: '1.0 TB', interfaceType: 'NVMe', health: '98%', temp: '34°C', busType: 'PCIe 4.0 x4', devicePath: '/dev/mock_nvme0n1' },
-  { serial: 'WD-WCC6Y6XNXE44', model: 'WD Blue 3D NAND (Mock SATA)', capacity: '500 GB', interfaceType: 'SATA SSD', health: '82%', temp: '29°C', busType: 'SATA III', devicePath: '/dev/mock_sda' },
-  { serial: 'ST-9X0023423A', model: 'Seagate Barracuda (Mock HDD)', capacity: '2.0 TB', interfaceType: 'SATA HDD', health: '100%', temp: '41°C', busType: 'SATA III', devicePath: '/dev/mock_sdb' },
-];
+const FALLBACK_DRIVES: Drive[] = [];
 
 export default function DriveSelectionPage() {
   const router = useRouter();
@@ -29,18 +25,32 @@ export default function DriveSelectionPage() {
   const fetchDrives = async () => {
     setIsLoading(true);
     try {
-      const resp = await apiClient.listDevices(true);
+      const resp = await apiClient.listDevices(false);
       if (resp?.devices && resp.devices.length > 0) {
-        const mapped: Drive[] = resp.devices.map((d: Device) => ({
-          serial: d.serial || `DEV-${d.devicePath}`,
-          model: d.model || 'Generic Storage Target',
-          capacity: d.capacityFormatted || '512 GB',
-          interfaceType: d.storageType || 'Block Device',
-          health: d.health || '100%',
-          temp: d.temp || '32°C',
-          busType: d.busType || 'NVMe/SATA',
-          devicePath: d.devicePath,
-        }));
+        const mapped: Drive[] = resp.devices.map((d: any) => {
+          let cap = "512 GB";
+          if (d.capacityFormatted) {
+            cap = d.capacityFormatted;
+          } else if (d.capacityBytes) {
+            const gb = d.capacityBytes / (1024 * 1024 * 1024);
+            cap = gb >= 1000 ? `${(gb / 1024).toFixed(1)} TB` : `${gb.toFixed(1)} GB`;
+          }
+
+          const isSys = Boolean(d.systemDisk || d.isSystemDrive);
+          const mounts = d.mountPoints?.length ? ` (${d.mountPoints.join(', ')})` : '';
+
+          return {
+            serial: d.serial || `DEV-${d.devicePath}`,
+            model: (d.model || 'Generic Storage Target') + mounts,
+            capacity: cap,
+            interfaceType: d.storageType || d.type || 'Block Device',
+            health: isSys ? '99% (OS)' : (d.health || '100%'),
+            temp: d.temp || '31°C',
+            busType: d.interface || d.busType || 'USB/SATA',
+            devicePath: d.devicePath,
+            isSystem: isSys,
+          };
+        });
         setDrives(mapped);
         setBackendOnline(true);
       } else {
@@ -182,11 +192,17 @@ export default function DriveSelectionPage() {
                     <td className="px-6 py-4 text-sm text-slate-600">
                       <span className="font-semibold text-slate-700">{drive.health}</span> <span className="text-slate-400 mx-1">|</span> {drive.temp}
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-600 font-mono text-xs">{drive.busType}</td>
+                    <td className="px-6 py-4 text-slate-600 font-mono text-xs">{drive.busType}</td>
                     <td className="px-6 py-4">
-                      <span className="px-3 py-1 text-xs font-semibold tracking-wide bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md">
-                        ONLINE
-                      </span>
+                      {drive.isSystem ? (
+                        <span className="px-2.5 py-1 text-xs font-semibold tracking-wide bg-amber-50 text-amber-700 border border-amber-200 rounded-md">
+                          PROTECTED (OS)
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 text-xs font-semibold tracking-wide bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md">
+                          TARGET READY
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );

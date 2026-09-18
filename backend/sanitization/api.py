@@ -54,7 +54,7 @@ class SanitizationApiRouter:
         try:
             # 1. GET /api/devices
             if method == "GET" and clean_path == "/api/devices":
-                include_mock = query.get("includeMock", ["true"])[0].lower() in ("true", "1")
+                include_mock = query.get("includeMock", ["false"])[0].lower() in ("true", "1")
                 devices = self.service.list_devices(include_mock=include_mock)
                 return 200, {"status": "SUCCESS", "devices": [d.to_dict() for d in devices]}
 

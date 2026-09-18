@@ -77,6 +77,8 @@ export interface CarvedFile {
   triage_priority: "HIGH" | "MEDIUM" | "LOW";
   sha256: string;
   offset_bytes: number;
+  filename?: string;
+  saved_path?: string;
 }
 
 export interface CarvingJobResponse {
@@ -141,7 +143,7 @@ class ForensiwipeClient {
   }
 
   // Devices & Drive Sanitization (PS Req 1)
-  async listDevices(includeMock: boolean = true): Promise<{ status: string; devices: Device[] }> {
+  async listDevices(includeMock: boolean = false): Promise<{ status: string; devices: Device[] }> {
     return this.request(`/api/devices?includeMock=${includeMock ? "true" : "false"}`);
   }
 

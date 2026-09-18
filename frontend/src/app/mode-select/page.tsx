@@ -52,7 +52,7 @@ export default function ModeSelectPage() {
         {/* Erase & Sanitize (Drive - PS Req 1) */}
         <button
           onClick={() => handleSelectMode('erase', '/erase/confirm')}
-          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-red-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 text-left"
+          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-red-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300"
         >
           <div className="w-14 h-14 rounded-xl bg-red-50 text-red-600 flex items-center justify-center mb-5 group-hover:scale-110 transition-all duration-300 z-10">
             <Eraser className="w-7 h-7" />
@@ -66,7 +66,7 @@ export default function ModeSelectPage() {
         {/* File & Slack Eraser (Targeted - PS Req 2) */}
         <button
           onClick={() => handleSelectMode('erase', '/file-eraser')}
-          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-amber-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 text-left"
+          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-amber-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300"
         >
           <div className="w-14 h-14 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center mb-5 group-hover:scale-110 transition-all duration-300 z-10">
             <FileText className="w-7 h-7" />
@@ -80,7 +80,7 @@ export default function ModeSelectPage() {
         {/* Recover & Carve (PS Req 3) */}
         <button
           onClick={() => handleSelectMode('recovery', '/recovery/scan')}
-          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-teal-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 text-left"
+          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-teal-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300"
         >
           <div className="w-14 h-14 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center mb-5 group-hover:scale-110 transition-all duration-300 z-10">
             <Puzzle className="w-7 h-7" />
@@ -94,7 +94,7 @@ export default function ModeSelectPage() {
         {/* Certify & Report */}
         <button
           onClick={() => handleSelectMode('neutral', '/certify/draft')}
-          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-emerald-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300 text-left"
+          className="relative flex flex-col items-center text-center p-8 bg-white border border-slate-200 shadow-sm border-t-4 border-t-emerald-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-lg hover:border-slate-300"
         >
           <div className="w-14 h-14 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-5 group-hover:scale-110 transition-all duration-300 z-10">
             <FileBadge className="w-7 h-7" />

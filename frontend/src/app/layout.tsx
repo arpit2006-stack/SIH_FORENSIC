@@ -4,7 +4,7 @@ import "./globals.css";
 import { SessionProvider } from "@/context/SessionContext";
 import ClientHeader from "@/components/ClientHeader";
 import ClientBanner from "@/components/ClientBanner";
-import { FolderOpen, Archive, Database, ShieldCheck, LayoutDashboard } from 'lucide-react';
+import SidebarNav from "@/components/SidebarNav";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -39,44 +39,7 @@ export default function RootLayout({
                 <h1 className="text-lg font-bold tracking-widest text-white uppercase">Forensic Wipe</h1>
               </div>
             </div>
-            <nav className="flex-1 p-4 space-y-6 overflow-y-auto">
-              
-              <div className="space-y-1">
-                <div className="flex items-center px-4 py-2.5 rounded-md bg-slate-800 text-white cursor-pointer font-medium shadow-sm hover:bg-slate-700 transition-colors">
-                  <LayoutDashboard className="w-4 h-4 mr-3 text-teal-400" />
-                  Dashboard
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="px-4 text-xs font-semibold text-slate-500 tracking-wider uppercase">Cases</h3>
-                <div className="space-y-1">
-                  <div className="flex items-center px-4 py-2 rounded-md text-slate-300 cursor-pointer font-medium hover:bg-slate-800 hover:text-white transition-colors">
-                    <FolderOpen className="w-4 h-4 mr-3 text-slate-400" />
-                    Active Cases
-                  </div>
-                  <div className="flex items-center px-4 py-2 rounded-md text-slate-300 cursor-pointer font-medium hover:bg-slate-800 hover:text-white transition-colors">
-                    <Archive className="w-4 h-4 mr-3 text-slate-400" />
-                    Archived
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="px-4 text-xs font-semibold text-slate-500 tracking-wider uppercase">Toolkit</h3>
-                <div className="space-y-1">
-                  <div className="flex items-center px-4 py-2 rounded-md text-slate-300 cursor-pointer font-medium hover:bg-slate-800 hover:text-white transition-colors">
-                    <Database className="w-4 h-4 mr-3 text-slate-400" />
-                    Data Recovery
-                  </div>
-                  <div className="flex items-center px-4 py-2 rounded-md text-slate-300 cursor-pointer font-medium hover:bg-slate-800 hover:text-white transition-colors">
-                    <ShieldCheck className="w-4 h-4 mr-3 text-slate-400" />
-                    Hash Verification
-                  </div>
-                </div>
-              </div>
-
-            </nav>
+            <SidebarNav />
             <div className="p-4 border-t border-slate-800 bg-slate-900 text-xs text-slate-500 font-mono text-center">
               NTRO FORENSIC TOOLKIT V2.4
             </div>

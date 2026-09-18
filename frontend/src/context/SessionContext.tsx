@@ -11,6 +11,7 @@ export type Drive = {
   temp: string;
   busType: string;
   devicePath?: string;
+  isSystem?: boolean;
 };
 
 type Mode = 'erase' | 'recovery' | 'neutral';

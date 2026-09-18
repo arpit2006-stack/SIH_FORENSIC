@@ -496,7 +496,7 @@ class DeviceDiscoveryManager:
     def __init__(
         self,
         mock_adapter: MockSanitizationAdapter | None = None,
-        enable_mock_devices: bool = True,
+        enable_mock_devices: bool = False,
     ):
         self.mock_adapter = mock_adapter or MockSanitizationAdapter()
         self.enable_mock_devices = enable_mock_devices
