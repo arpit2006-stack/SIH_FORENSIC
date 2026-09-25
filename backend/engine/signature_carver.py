@@ -32,12 +32,15 @@ class Stream:
     blocks: list[int]          # block indices in carved order
     closed: bool               # footer found -> complete contiguous file
     footer_offset: int = -1    # byte offset of footer end inside last block (closed only)
+    header_offset: int = 0     # byte offset of header start inside first block (default 0)
 
     def assemble(self, image: np.ndarray) -> bytes:
-        """Concatenate source bytes only; trims trailing slack after the footer."""
+        """Concatenate source bytes only; trims trailing slack after the footer and sector offset before header."""
         raw = b"".join(image[i].tobytes() for i in self.blocks)
         if self.closed and self.footer_offset > 0:
             raw = raw[: (len(self.blocks) - 1) * BLOCK_SIZE + self.footer_offset]
+        if self.header_offset > 0:
+            raw = raw[self.header_offset:]
         return raw
 
 
@@ -47,6 +50,7 @@ class CarveResult:
     orphans: list[int] = field(default_factory=list)   # candidate blocks for ML reassembly
     header_blocks: dict[int, str] = field(default_factory=dict)  # idx -> mime
     footer_blocks: dict[int, str] = field(default_factory=dict)
+    header_offsets: dict[int, int] = field(default_factory=dict) # idx -> byte offset in block
 
 
 def detect_header(block: bytes | np.ndarray) -> str | None:
@@ -54,6 +58,22 @@ def detect_header(block: bytes | np.ndarray) -> str | None:
     for mime, (heads, _) in SIGNATURES.items():
         if any(b.startswith(h) for h in heads):
             return mime
+    return None
+
+
+def detect_header_offset(block: bytes | np.ndarray, sector_size: int = 512) -> tuple[str, int] | None:
+    """Byte-accurate detection for 512-byte sector-aligned or block-aligned file headers.
+    Returns (mime, offset_in_block) or None. Prioritizes offset 0.
+    """
+    b = block.tobytes() if isinstance(block, np.ndarray) else block
+    for mime, (heads, _) in SIGNATURES.items():
+        if any(b.startswith(h) for h in heads):
+            return mime, 0
+    for off in range(sector_size, len(b), sector_size):
+        sub = b[off:]
+        for mime, (heads, _) in SIGNATURES.items():
+            if any(sub.startswith(h) for h in heads):
+                return mime, off
     return None
 
 
@@ -79,8 +99,8 @@ def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
     """image: (N, 4096) uint8. noise_mask: optional bool[N] from FastBlockTriage (True = skip).
 
     Contiguity heuristic: a stream stays open while the next block is not a
-    header of any type and (if provided) not flagged as noise. It closes on the
-    footer. Streams that hit a header/noise/end-of-image before the footer are
+    header of any foreign type and (if provided) not flagged as noise. It closes on the
+    valid footer. Streams that hit a foreign header/noise/end-of-image before the footer are
     returned open; their blocks and every unclaimed non-noise block become orphans.
     """
     n = len(image)
@@ -89,9 +109,11 @@ def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
     for i in range(n):
         if noise[i]:
             continue
-        m = detect_header(image[i])
-        if m:
-            res.header_blocks[i] = m
+        hdr = detect_header_offset(image[i])
+        if hdr:
+            mime, off = hdr
+            res.header_blocks[i] = mime
+            res.header_offsets[i] = off
         for mime in SIGNATURES:
             if find_footer(image[i], mime) >= 0:
                 res.footer_blocks.setdefault(i, mime)
@@ -103,16 +125,37 @@ def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
         blocks = [start]
         closed, foff = False, -1
         j = start
+        has_sos = (mime != "image/jpeg")
         while len(blocks) <= max_stream_blocks:
-            foff = find_footer(image[j], mime)
+            blk_bytes = image[j].tobytes()
+            if mime == "image/jpeg" and not has_sos:
+                if b"\xff\xda" in blk_bytes:
+                    has_sos = True
+
+            foff = -1
+            if has_sos:
+                foff = find_footer(blk_bytes, mime)
+                if mime == "image/jpeg" and foff >= 0:
+                    sos_pos = blk_bytes.rfind(b"\xff\xda")
+                    if sos_pos >= 0 and foff <= sos_pos + 2:
+                        foff = -1
+
             if foff >= 0 and not (j == start and foff < len(SIGNATURES[mime][0][0]) + 4):
                 closed = True
                 break
             j += 1
-            if j >= n or noise[j] or j in res.header_blocks or claimed[j]:
+            # Stop if next block is out of bounds, noise, claimed, or a header of another file type.
+            # For application/zip, internal file entries also start with PK\x03\x04, so only abort
+            # if encountering a foreign header (e.g. PDF/JPEG).
+            is_foreign_header = (
+                j in res.header_blocks
+                and (mime != "application/zip" or res.header_blocks[j] != "application/zip")
+            )
+            if j >= n or noise[j] or is_foreign_header or claimed[j]:
                 break
             blocks.append(j)
-        stream = Stream(mime, blocks, closed, foff if closed else -1)
+        hoff = res.header_offsets.get(start, 0)
+        stream = Stream(mime, blocks, closed, foff if closed else -1, header_offset=hoff)
         res.streams.append(stream)
         if closed:
             claimed[blocks] = True

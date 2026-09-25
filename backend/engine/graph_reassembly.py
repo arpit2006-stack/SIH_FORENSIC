@@ -18,7 +18,7 @@ from scipy.optimize import linear_sum_assignment
 
 from engine.carver_ml import (SiameseAdjacency, build_pool_context, sht_pair_affinity,
                               validate_structural_coherence)
-from engine.signature_carver import SIGNATURES, CarveResult, Stream, detect_header
+from engine.signature_carver import SIGNATURES, CarveResult, Stream, detect_header, find_footer
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +37,13 @@ class Chain:
         return float(sum(self.edge_costs))
 
     def assemble(self, fragments: list[bytes]) -> bytes:
-        return b"".join(fragments[i] for i in self.order)
+        raw = b"".join(fragments[i] for i in self.order)
+        if self.mime and self.order:
+            last_blk = fragments[self.order[-1]]
+            foff = find_footer(last_blk, self.mime)
+            if foff > 0:
+                raw = raw[: (len(self.order) - 1) * len(last_blk) + foff]
+        return raw
 
 
 @dataclass
@@ -181,9 +187,12 @@ class GlobalFragmentResolver:
                  if any(f.rstrip(b"\0").endswith(foot) for _, foot in SIGNATURES.values())}
         succ = self._assign(aff, heads, tails)
         chains = self._chains(succ, aff, fragments)
-        chains.sort(key=lambda c: (-len(c.order), c.residual))
+        # Filter: Only keep chains that begin with a recognized file header.
+        # Headless orphan chains (arbitrary unallocated fragments) are not valid recoverable files.
+        valid_chains = [c for c in chains if c.mime is not None and len(c.order) > 1]
+        valid_chains.sort(key=lambda c: (-len(c.order), c.residual))
         singles = [c.order[0] for c in chains if len(c.order) == 1]
-        return ResolveResult([c for c in chains if len(c.order) > 1], aff, singles)
+        return ResolveResult(valid_chains, aff, singles)
 
 
 if __name__ == "__main__":

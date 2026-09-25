@@ -73,9 +73,30 @@ export default function FileEraserPage() {
             placeholder="e.g. C:\Users\Target\Confidential.docx or MOCK:/demo/file.dat"
             className="w-full px-4 py-3 border border-slate-300 rounded-md font-mono text-slate-800 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500 shadow-sm"
           />
-          <p className="text-xs text-slate-400 mt-1">
-            Tip: Enter a mock path (e.g. <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">MOCK:/demo/secret.doc</code>) for non-destructive demonstration.
-          </p>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <span className="text-xs text-slate-400 font-semibold uppercase">Presets:</span>
+            <button
+              type="button"
+              onClick={() => setTargetPath('MOCK:/evidence/sensitive_records.xlsx')}
+              className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-200 font-mono transition"
+            >
+              Mock Excel (.xlsx)
+            </button>
+            <button
+              type="button"
+              onClick={() => setTargetPath('MOCK:/evidence/classified_database.sqlite')}
+              className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-200 font-mono transition"
+            >
+              Mock Database (.sqlite)
+            </button>
+            <button
+              type="button"
+              onClick={() => setTargetPath('D:\\test_evidence.dat')}
+              className="text-xs px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded border border-teal-200 font-mono transition"
+            >
+              USB Target (D:\test_evidence.dat)
+            </button>
+          </div>
         </div>
 
         {/* Options */}

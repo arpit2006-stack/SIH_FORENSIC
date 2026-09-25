@@ -5,7 +5,30 @@ import { useRouter } from 'next/navigation';
 import { useSession, Drive } from '@/context/SessionContext';
 import { apiClient, Device } from '@/lib/apiClient';
 
-const FALLBACK_DRIVES: Drive[] = [];
+const FALLBACK_DRIVES: Drive[] = [
+  {
+    serial: "C2ED9DAB",
+    model: "Generic Flash Disk (D:)",
+    capacity: "7.5 GB",
+    interfaceType: "USB Disk",
+    health: "100%",
+    temp: "32°C",
+    busType: "USB",
+    devicePath: "D:",
+    isSystem: false,
+  },
+  {
+    serial: "MOCK-NVME-8890",
+    model: "Samsung 980 PRO 1TB (Synthetic)",
+    capacity: "1.0 TB",
+    interfaceType: "NVMe SSD",
+    health: "100%",
+    temp: "35°C",
+    busType: "PCIe",
+    devicePath: "/dev/mock_nvme0n1",
+    isSystem: false,
+  },
+];
 
 export default function DriveSelectionPage() {
   const router = useRouter();
@@ -18,7 +41,7 @@ export default function DriveSelectionPage() {
   } = useSession();
   
   const [drives, setDrives] = useState<Drive[]>(FALLBACK_DRIVES);
-  const [localSelectedDrive, setLocalSelectedDrive] = useState<Drive | null>(null);
+  const [localSelectedDrive, setLocalSelectedDrive] = useState<Drive | null>(selectedDrive || null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [backendOnline, setBackendOnline] = useState<boolean>(false);
   
@@ -53,12 +76,19 @@ export default function DriveSelectionPage() {
         });
         setDrives(mapped);
         setBackendOnline(true);
+        // Pre-select the first non-system drive if not already selected
+        if (!localSelectedDrive) {
+          const firstTarget = mapped.find((m) => !m.isSystem) || mapped[0];
+          if (firstTarget) setLocalSelectedDrive(firstTarget);
+        }
       } else {
         setDrives(FALLBACK_DRIVES);
+        if (!localSelectedDrive) setLocalSelectedDrive(FALLBACK_DRIVES[0]);
       }
     } catch {
       setDrives(FALLBACK_DRIVES);
       setBackendOnline(false);
+      if (!localSelectedDrive) setLocalSelectedDrive(FALLBACK_DRIVES[0]);
     } finally {
       setIsLoading(false);
     }
@@ -66,9 +96,14 @@ export default function DriveSelectionPage() {
 
   useEffect(() => {
     setSessionMode('neutral');
-    setSelectedDrive(null);
     fetchDrives();
-  }, [setSessionMode, setSelectedDrive]);
+  }, [setSessionMode]);
+
+  useEffect(() => {
+    if (selectedDrive) {
+      setLocalSelectedDrive(selectedDrive);
+    }
+  }, [selectedDrive]);
 
   const handleRefresh = () => {
     fetchDrives();

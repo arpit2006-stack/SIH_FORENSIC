@@ -5,11 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useSession } from '@/context/SessionContext';
 import DriveSummaryCard from '@/components/DriveSummaryCard';
 import { apiClient } from '@/lib/apiClient';
-import { AlertTriangle, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, CheckCircle2, HardDrive } from 'lucide-react';
 
 export default function EraseConfirmPage() {
   const router = useRouter();
-  const { selectedDrive, caseId, investigatorName, setActiveOperationId, setLatestReport } = useSession();
+  const { selectedDrive, setSelectedDrive, caseId, investigatorName, setActiveOperationId, setLatestReport } = useSession();
 
   const [method, setMethod] = useState<string>('NIST_SP_800_88_PURGE');
   const [passphrase, setPassphrase] = useState<string>('');
@@ -17,8 +17,45 @@ export default function EraseConfirmPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (!selectedDrive) {
-    if (typeof window !== 'undefined') router.push('/');
-    return null;
+    return (
+      <div className="max-w-2xl mx-auto my-12 p-8 bg-white border border-slate-200 rounded-2xl shadow-sm space-y-6 text-center animate-in fade-in duration-300">
+        <div className="w-16 h-16 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+          <HardDrive className="w-8 h-8" />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">No Erasure Target Selected</h2>
+          <p className="text-slate-500 text-sm mt-2 max-w-md mx-auto">
+            A target storage volume must be selected before opening the sanitization authorization gate.
+          </p>
+        </div>
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          <button
+            onClick={() => router.push('/')}
+            className="w-full sm:w-auto px-6 py-2.5 bg-slate-900 text-white rounded-lg text-sm font-semibold hover:bg-slate-800 transition shadow-sm"
+          >
+            ← Select Target on Dashboard
+          </button>
+          <button
+            onClick={() => {
+              setSelectedDrive({
+                serial: "C2ED9DAB",
+                model: "Generic Flash Disk (D:)",
+                capacity: "7.5 GB",
+                interfaceType: "USB Disk",
+                health: "100%",
+                temp: "32°C",
+                busType: "USB",
+                devicePath: "D:",
+                isSystem: false,
+              });
+            }}
+            className="w-full sm:w-auto px-6 py-2.5 bg-red-50 text-red-700 border border-red-300 rounded-lg text-sm font-semibold hover:bg-red-100 transition shadow-sm"
+          >
+            Engage Flash Disk (D:)
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const requiredSerial = selectedDrive.serial;
@@ -132,9 +169,21 @@ export default function EraseConfirmPage() {
           <label htmlFor="passphrase" className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
             Safety Interlock Confirmation
           </label>
-          <p className="text-sm text-slate-600 mb-3">
-            To unlock the execution trigger, type the target serial number exactly: <code className="bg-slate-100 px-2 py-0.5 rounded font-mono font-bold text-slate-800">{requiredSerial}</code>
-          </p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm text-slate-600">
+              To unlock the execution trigger, type the target serial number exactly:{" "}
+              <code className="bg-slate-100 px-2 py-0.5 rounded font-mono font-bold text-slate-800">
+                {requiredSerial}
+              </code>
+            </p>
+            <button
+              type="button"
+              onClick={() => setPassphrase(requiredSerial)}
+              className="text-xs font-semibold text-red-600 hover:text-red-800 hover:underline flex items-center space-x-1"
+            >
+              <span>Autofill Serial</span>
+            </button>
+          </div>
           <input
             id="passphrase"
             type="text"

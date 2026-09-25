@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 # Add backend directory to sys.path
@@ -26,11 +28,13 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import numpy as np
+from PIL import Image
 
 from engine.signature_carver import BLOCK_SIZE, carve, detect_header, find_footer
-from engine.graph_reassembly import GlobalFragmentResolver
+from engine.graph_reassembly import GlobalFragmentResolver, validate_carve
 from engine.report_gen import ForensicReliabilityScorer
 from engine.pretrain_utils import SyntheticFragmentCorpus, _make_jpeg, _make_pdf, _make_zip
+from engine.api import verify_carved_file
 
 
 def create_synthetic_corpus() -> tuple[np.ndarray, dict[str, bytes]]:
@@ -127,21 +131,30 @@ def carve_target(
         image = np.stack(blocks_list)
         print(f"    Successfully ingested {len(image)} blocks ({len(image) * BLOCK_SIZE:,} bytes)")
 
-    # Phase 2: Deterministic Signature Carving
+    # Phase 2: Deterministic Signature Carving (FR2.0)
     print("\n[*] Phase 2: Scanning magic bytes (Headers & Trailers)...")
     carve_res = carve(image)
-    print(f"    Straight streams found:   {len(carve_res.streams)}")
+    print(f"    Raw streams found:        {len(carve_res.streams)}")
+
+    # FR2.0 -> FR2.1 Hand-off: Structural Coherence validation gate
+    valid_streams, orphan_indices = validate_carve(image, carve_res, min_struct=0.85)
+    carve_res.streams = valid_streams
+    carve_res.orphans = orphan_indices
+    print(f"    Verified straight streams:{len(carve_res.streams)}")
     print(f"    Candidate orphan blocks:  {len(carve_res.orphans)}")
 
     recovered: list[dict] = []
     scorer = ForensicReliabilityScorer()
     file_counter = 1
 
-    # Extract straight streams
+    # Extract verified straight streams
     for s in carve_res.streams:
         data = s.assemble(image)
+        if not data.strip(b"\x00"):
+            continue
         sha = hashlib.sha256(data).hexdigest()
         score = scorer.score(data=data, mime=s.mime)
+        is_valid, reason = verify_carved_file(data, s.mime)
 
         ext = s.mime.split("/")[-1]
         if ext == "jpeg":
@@ -157,8 +170,10 @@ def carve_target(
             "blocks": len(s.blocks),
             "size_bytes": len(data),
             "start_block": s.blocks[0],
-            "start_offset": s.blocks[0] * BLOCK_SIZE,
+            "start_offset": s.blocks[0] * BLOCK_SIZE + s.header_offset,
             "reliability_score": round(score.S, 3),
+            "verified": is_valid,
+            "validation_status": "OPEN_VERIFIED" if is_valid else f"INTEGRITY_WARNING: {reason}",
             "sha256": sha,
             "type": "CONTIGUOUS",
         })
@@ -176,12 +191,13 @@ def carve_target(
             for chain in res_result.chains:
                 data = chain.assemble(orphan_bytes)
                 # Skip pure unwritten null blocks (all zeros)
-                if not data.strip(b"\x00"):
+                if not data.strip(b"\x00") or len(data) < 64:
                     continue
 
                 sha = hashlib.sha256(data).hexdigest()
                 mime = chain.mime or "application/octet-stream"
                 score = scorer.score(data=data, mime=mime)
+                is_valid, reason = verify_carved_file(data, mime)
 
                 ext = mime.split("/")[-1]
                 if ext == "jpeg":
@@ -199,6 +215,8 @@ def carve_target(
                     "start_block": carve_res.orphans[chain.order[0]],
                     "start_offset": carve_res.orphans[chain.order[0]] * BLOCK_SIZE,
                     "reliability_score": round(score.S, 3),
+                    "verified": is_valid,
+                    "validation_status": "OPEN_VERIFIED" if is_valid else f"INTEGRITY_WARNING: {reason}",
                     "sha256": sha,
                     "type": "REASSEMBLED (HUNGARIAN)",
                 })
@@ -209,12 +227,13 @@ def carve_target(
     elapsed = time.time() - t0
 
     # Summary table
-    print("\n" + "=" * 80)
-    print(f"{'ID':<9} {'TYPE':<22} {'MIME':<18} {'SIZE':<10} {'SCORE':<7} {'START OFFSET'}")
-    print("-" * 80)
+    print("\n" + "=" * 92)
+    print(f"{'ID':<9} {'TYPE':<22} {'MIME':<18} {'SIZE':<10} {'SCORE':<7} {'STATUS':<15} {'OFFSET'}")
+    print("-" * 92)
     for r in recovered:
-        print(f"{r['id']:<9} {r['type']:<22} {r['mime']:<18} {r['size_bytes']:<10} {r['reliability_score']:<7} {r['start_offset']:,} B")
-    print("=" * 80)
+        stat = "VERIFIED" if r.get("verified") else "WARNING"
+        print(f"{r['id']:<9} {r['type']:<22} {r['mime']:<18} {r['size_bytes']:<10} {r['reliability_score']:<7} {stat:<15} {r['start_offset']:,} B")
+    print("=" * 92)
 
     # Section 63 BSA Chain of Custody Log
     cert_path = out_path / "section_63_bsa_audit.json"

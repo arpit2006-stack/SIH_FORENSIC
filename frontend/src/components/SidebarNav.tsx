@@ -28,16 +28,17 @@ const NAV_ITEMS = [
     ],
   },
   {
-    section: "Cases",
+    section: "Cases & Evidence",
     items: [
-      { label: "Active Cases", href: "/erase/confirm", icon: FolderOpen, accent: "text-slate-400" },
-      { label: "Archived", href: "/certify/draft", icon: Archive, accent: "text-slate-400" },
+      { label: "Active Cases", href: "/audit?tab=cases", icon: FolderOpen, accent: "text-blue-400" },
+      { label: "Recovered Artifacts", href: "/audit?tab=artifacts", icon: Archive, accent: "text-purple-400" },
     ],
   },
   {
-    section: "Toolkit",
+    section: "Toolkit & Compliance",
     items: [
-      { label: "Hash Verification", href: "/certify/draft", icon: ShieldCheck, accent: "text-emerald-400" },
+      { label: "Hash Verification", href: "/audit?tab=ledger", icon: ShieldCheck, accent: "text-emerald-400" },
+      { label: "Section 63 Certificate", href: "/certify/draft", icon: FileText, accent: "text-emerald-400" },
     ],
   },
 ];

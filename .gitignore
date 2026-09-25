@@ -21,8 +21,20 @@ __pycache__/
 .pytest_cache/
 **/.pytest_cache/
 
-# Local Generated Reports (Output)
+# Local Generated Reports & Analysis Output
 backend/*.pdf
-backend/graphify-out/
-
+graphify-out/
+**/graphify-out/
 recovered_evidence/
+**/recovered_evidence/
+
+# Agent & assistant caches
+.agents/
+**/.agents/
+.claude/
+**/.claude/
+.remember/
+**/.remember/
+scratch/
+**/scratch/
+

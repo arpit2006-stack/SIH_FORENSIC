@@ -1,27 +1,61 @@
 "use client";
 
-import React, { useEffect } from 'react';
+import React from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/context/SessionContext';
 import DriveSummaryCard from '@/components/DriveSummaryCard';
-import { Eraser, Puzzle, FileBadge, FileText, ArrowLeft } from 'lucide-react';
+import { Eraser, Puzzle, FileBadge, FileText, ArrowLeft, HardDrive } from 'lucide-react';
 
 export default function ModeSelectPage() {
   const router = useRouter();
-  const { selectedDrive, setSessionMode } = useSession();
-
-  useEffect(() => {
-    if (!selectedDrive) {
-      router.push('/');
-    }
-  }, [selectedDrive, router]);
-
-  if (!selectedDrive) return null;
+  const { selectedDrive, setSelectedDrive, setSessionMode } = useSession();
 
   const handleSelectMode = (mode: 'erase' | 'recovery' | 'neutral', path: string) => {
     setSessionMode(mode);
     router.push(path);
   };
+
+  if (!selectedDrive) {
+    return (
+      <div className="max-w-2xl mx-auto my-12 p-8 bg-white border border-slate-200 rounded-2xl shadow-sm space-y-6 text-center animate-in fade-in duration-300">
+        <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+          <HardDrive className="w-8 h-8" />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight">No Target Storage Media Selected</h2>
+          <p className="text-slate-500 text-sm mt-2 max-w-md mx-auto">
+            Please choose an active target drive or engage a forensic demo media volume to begin operations.
+          </p>
+        </div>
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          <button
+            onClick={() => router.push('/')}
+            className="w-full sm:w-auto px-6 py-2.5 bg-slate-900 text-white rounded-lg text-sm font-semibold hover:bg-slate-800 transition shadow-sm"
+          >
+            ← Select Target on Dashboard
+          </button>
+          <button
+            onClick={() => {
+              setSelectedDrive({
+                serial: "C2ED9DAB",
+                model: "Generic Flash Disk (D:)",
+                capacity: "7.5 GB",
+                interfaceType: "USB Disk",
+                health: "100%",
+                temp: "32°C",
+                busType: "USB",
+                devicePath: "D:",
+                isSystem: false,
+              });
+            }}
+            className="w-full sm:w-auto px-6 py-2.5 bg-teal-50 text-teal-700 border border-teal-300 rounded-lg text-sm font-semibold hover:bg-teal-100 transition shadow-sm"
+          >
+            Engage Flash Disk (D:)
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-12">

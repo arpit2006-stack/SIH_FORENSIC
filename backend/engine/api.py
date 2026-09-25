@@ -19,6 +19,7 @@ import subprocess
 import time
 import uuid
 import urllib.parse
+import zipfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,14 +28,64 @@ import numpy as np
 from PIL import Image
 
 from engine.pretrain_utils import BLOCK_SIZE
+from engine.triage_scorer import FastBlockTriage, NOISE_IDX
 from engine.signature_carver import carve, Stream
-from engine.graph_reassembly import GlobalFragmentResolver
+from engine.graph_reassembly import GlobalFragmentResolver, validate_carve
 from engine.report_gen import (
     ForensicReliabilityScorer,
     CertificateData,
     BSASection63CertificateGenerator,
     ScoreBreakdown,
 )
+
+
+def verify_carved_file(data: bytes, mime: str) -> tuple[bool, str]:
+    """Forensic verification gate ensuring carved bytes constitute an openable, uncorrupted file."""
+    if not data or len(data) < 32:
+        return False, "Insufficient data length"
+    try:
+        if mime == "image/jpeg":
+            if not data.startswith(b"\xff\xd8"):
+                return False, "Missing JPEG SOI marker"
+            # 1. Structural marker check
+            with Image.open(io.BytesIO(data)) as im:
+                im.verify()
+            # 2. Decompression check (verifies entropy-coded raster data without broken stream error)
+            with Image.open(io.BytesIO(data)) as im:
+                im.load()
+            return True, "Valid JPEG image structure"
+
+        elif mime == "application/zip":
+            if not data.startswith(b"PK\x03\x04"):
+                return False, "Missing PK\\x03\\x04 ZIP header"
+            with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+                info_list = zf.infolist()
+                if len(info_list) == 0:
+                    return False, "Empty or partial ZIP archive (no member files)"
+                bad_crc = zf.testzip()
+                if bad_crc is not None:
+                    return False, f"ZIP CRC checksum mismatch on {bad_crc}"
+            return True, "Valid ZIP archive structure"
+
+        elif mime == "application/pdf":
+            if not data.startswith(b"%PDF-"):
+                return False, "Missing %PDF header"
+            # Terminal %%EOF trailer check within the last 1024 bytes of trimmed data
+            eof_pos = data.rfind(b"%%EOF")
+            if eof_pos < 0 or (len(data) - eof_pos) > 1024:
+                return False, "Missing or misplaced terminal %%EOF trailer"
+            # Essential cross-reference and catalog checks
+            if b"xref" not in data and b"/XRef" not in data:
+                return False, "Missing PDF cross-reference table/stream"
+            if b"/Root" not in data and b"/Catalog" not in data:
+                return False, "Missing PDF document catalog dictionary"
+            return True, "Valid PDF document structure"
+
+        # Explicitly reject unverified/unsupported binary streams
+        return False, f"Unverified format: {mime} is not a certified target MIME type"
+
+    except Exception as err:
+        return False, f"Structure validation error: {err}"
 
 
 @dataclass
@@ -51,6 +102,8 @@ class CarvedFileSummary:
     offset_bytes: int
     filename: str = ""
     saved_path: str = ""
+    is_verified: bool = True
+    validation_status: str = "OPEN_VERIFIED"
 
 
 @dataclass
@@ -79,6 +132,12 @@ class CarvingApiRouter:
     def __init__(self):
         self.jobs: dict[str, CarvingJob] = {}
         self.scorer = ForensicReliabilityScorer()
+        self._triage: FastBlockTriage | None = None
+
+    def _get_triage(self) -> FastBlockTriage:
+        if self._triage is None:
+            self._triage = FastBlockTriage()
+        return self._triage
 
     def _create_synthetic_forensic_image(self) -> np.ndarray:
         """Create an in-memory 100-block synthetic disk image with fragmented JPEG and PDF."""
@@ -86,27 +145,34 @@ class CarvingApiRouter:
         total_blocks = 60
         image = np.zeros((total_blocks, BLOCK_SIZE), dtype=np.uint8)
 
-        # 1. Create a 4-block continuous JPEG
+        # 1. Create a continuous JPEG
         try:
             img = Image.fromarray(rng.integers(0, 256, (128, 128, 3), dtype=np.uint8))
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=75)
             jpeg_bytes = buf.getvalue()
-            # Write into blocks 5, 6, 7
-            for i in range(min(3, (len(jpeg_bytes) + BLOCK_SIZE - 1) // BLOCK_SIZE)):
+            n_blks = (len(jpeg_bytes) + BLOCK_SIZE - 1) // BLOCK_SIZE
+            for i in range(n_blks):
                 chunk = jpeg_bytes[i * BLOCK_SIZE : (i + 1) * BLOCK_SIZE]
                 image[5 + i, : len(chunk)] = np.frombuffer(chunk, dtype=np.uint8)
         except Exception:
             pass
 
         # 2. Create a fragmented PDF (Header at block 12, Body at block 25, Trailer at block 30)
-        pdf_head = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
-        pdf_body = b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
-        pdf_tail = b"xref\n0 3\n0000000000 65535 f \ntrailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n100\n%%EOF\n"
-
-        image[12, : len(pdf_head)] = np.frombuffer(pdf_head, dtype=np.uint8)
-        image[25, : len(pdf_body)] = np.frombuffer(pdf_body, dtype=np.uint8)
-        image[30, : len(pdf_tail)] = np.frombuffer(pdf_tail, dtype=np.uint8)
+        try:
+            from engine.pretrain_utils import _make_pdf
+            pdf_bytes = _make_pdf(rng, 10_000)
+            n_pdf = (len(pdf_bytes) + BLOCK_SIZE - 1) // BLOCK_SIZE
+            pdf_blks = [pdf_bytes[i * BLOCK_SIZE : (i + 1) * BLOCK_SIZE] for i in range(n_pdf)]
+            if n_pdf >= 3:
+                image[12, : len(pdf_blks[0])] = np.frombuffer(pdf_blks[0], dtype=np.uint8)
+                image[25, : len(pdf_blks[1])] = np.frombuffer(pdf_blks[1], dtype=np.uint8)
+                image[30, : len(pdf_blks[2])] = np.frombuffer(pdf_blks[2], dtype=np.uint8)
+            elif n_pdf == 2:
+                image[12, : len(pdf_blks[0])] = np.frombuffer(pdf_blks[0], dtype=np.uint8)
+                image[30, : len(pdf_blks[1])] = np.frombuffer(pdf_blks[1], dtype=np.uint8)
+        except Exception:
+            pass
 
         return image
 
@@ -209,22 +275,42 @@ class CarvingApiRouter:
         out_dir.mkdir(parents=True, exist_ok=True)
         job.output_dir = str(out_dir.resolve())
 
-        # Run Phase 2 Deterministic Signature Carving
-        carve_res = carve(image)
+        # Phase 1: Fast Block-Level Triage (1D-CNN) to screen noise & unallocated blocks
+        noise_mask = None
+        try:
+            triage = self._get_triage()
+            labels, _ = triage.scan(image)
+            noise_mask = (labels == NOISE_IDX)
+        except Exception:
+            pass
+
+        # Run Phase 2 Deterministic Signature Carving (FR2.0) with noise filtering
+        carve_res = carve(image, noise_mask=noise_mask)
+
+        # FR2.0 -> FR2.1 Structural Coherence Validation Gate
+        valid_streams, orphan_indices = validate_carve(image, carve_res, min_struct=0.85)
+        carve_res.streams = valid_streams
+        carve_res.orphans = orphan_indices
         job.orphans_count = len(carve_res.orphans)
 
         recovered_files: list[CarvedFileSummary] = []
         file_idx = 1
 
-        # Process and save straight streams
+        # Process and save verified straight streams
         for stream in carve_res.streams:
             raw_data = stream.assemble(image)
-            if not raw_data.strip(b"\x00"):
+            if not raw_data.strip(b"\x00") or len(raw_data) < 32:
+                continue
+
+            is_valid, reason = verify_carved_file(raw_data, stream.mime)
+            score_res: ScoreBreakdown = self.scorer.score(data=raw_data, mime=stream.mime)
+
+            # Strict Rejection Gate: Discard unopenable, corrupted, or low-confidence files
+            if not is_valid or score_res.S < 0.65 or stream.mime == "application/octet-stream":
                 continue
 
             sha = hashlib.sha256(raw_data).hexdigest()
-            score_res: ScoreBreakdown = self.scorer.score(data=raw_data, mime=stream.mime)
-            prio = "HIGH" if score_res.S >= 0.75 else ("MEDIUM" if score_res.S >= 0.5 else "LOW")
+            prio = "HIGH" if score_res.S >= 0.75 else "MEDIUM"
 
             ext = stream.mime.split("/")[-1]
             if ext == "jpeg":
@@ -233,6 +319,7 @@ class CarvingApiRouter:
             saved_file = out_dir / fname
             saved_file.write_bytes(raw_data)
 
+            start_offset = (stream.blocks[0] * BLOCK_SIZE + stream.header_offset) if stream.blocks else 0
             recovered_files.append(
                 CarvedFileSummary(
                     file_id=f"REC-{file_idx:03d}",
@@ -249,9 +336,11 @@ class CarvingApiRouter:
                     },
                     triage_priority=prio,
                     sha256=sha,
-                    offset_bytes=stream.blocks[0] * BLOCK_SIZE if stream.blocks else 0,
+                    offset_bytes=start_offset,
                     filename=fname,
                     saved_path=str(saved_file.resolve()),
+                    is_verified=True,
+                    validation_status="OPEN_VERIFIED",
                 )
             )
             file_idx += 1
@@ -267,14 +356,23 @@ class CarvingApiRouter:
                     orphan_bytes: list[bytes] = [image[blk].tobytes() for blk in candidate_orphans]
                     resolve_result = resolver.resolve(orphan_bytes, mime=None)
                     for chain in resolve_result.chains:
+                        # Skip headless chains or octet-stream
+                        if not chain.mime or chain.mime == "application/octet-stream":
+                            continue
+
                         raw_data = chain.assemble(orphan_bytes)
                         if not raw_data.strip(b"\x00") or len(raw_data) < 64:
                             continue
 
-                        sha = hashlib.sha256(raw_data).hexdigest()
-                        mime_str = chain.mime or "application/octet-stream"
-                        score_res = self.scorer.score(data=raw_data, mime=mime_str)
+                        is_valid, reason = verify_carved_file(raw_data, chain.mime)
+                        score_res = self.scorer.score(data=raw_data, mime=chain.mime)
 
+                        # Strict Rejection Gate: Discard unopenable or low-confidence reassembled files
+                        if not is_valid or score_res.S < 0.65:
+                            continue
+
+                        sha = hashlib.sha256(raw_data).hexdigest()
+                        mime_str = chain.mime
                         ext = mime_str.split("/")[-1]
                         if ext == "jpeg":
                             ext = "jpg"
@@ -302,6 +400,8 @@ class CarvingApiRouter:
                                 offset_bytes=start_blk * BLOCK_SIZE,
                                 filename=fname,
                                 saved_path=str(saved_file.resolve()),
+                                is_verified=True,
+                                validation_status="OPEN_VERIFIED",
                             )
                         )
                         file_idx += 1
