@@ -534,6 +534,42 @@ class DeviceDiscoveryManager:
             mock_devs = self.mock_adapter.list_devices()
             devices.extend(mock_devs)
 
+        # 3. C-DAC TrueImager & Raw Bitstream Images (.raw, .dd, .img)
+        try:
+            from pathlib import Path
+            import hashlib
+            base_backend = Path(__file__).resolve().parents[1]
+            demo_dirs = [
+                base_backend / "demo_data",
+                base_backend.parent / "demo_data",
+            ]
+            for ddir in demo_dirs:
+                if ddir.is_dir():
+                    for pattern in ("*.raw", "*.dd", "*.img"):
+                        for img_path in ddir.glob(pattern):
+                            fsize = img_path.stat().st_size
+                            s_hash = hashlib.sha256(str(img_path).encode("utf-8")).hexdigest()[:8].upper()
+                            devices.append(
+                                DeviceInfo(
+                                    device_path=str(img_path.resolve()),
+                                    model=f"C-DAC TrueImager Bitstream ({img_path.name})",
+                                    serial=f"CDAC-{s_hash}",
+                                    storage_type=StorageType.USB,
+                                    capacity_bytes=fsize,
+                                    logical_block_size=512,
+                                    physical_block_size=4096,
+                                    interface="Forensic Bitstream",
+                                    vendor="C-DAC / LEA",
+                                    mount_points=[],
+                                    mounted=False,
+                                    removable=True,
+                                    system_disk=False,
+                                    warnings=["Interoperable with C-DAC TrueImager / raw bitstream dumps"],
+                                )
+                            )
+        except Exception:
+            pass
+
         return devices
 
     def find_device_by_path(self, device_path: str) -> DeviceInfo | None:

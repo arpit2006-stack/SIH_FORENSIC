@@ -105,7 +105,7 @@ export interface FileSanitizeResult {
   audit_hash: string;
 }
 
-class ForensiwipeClient {
+class ForensiWipeClient {
   private base: string;
 
   constructor(baseUrl: string = API_BASE) {
@@ -128,7 +128,7 @@ class ForensiwipeClient {
       }
       return (await res.json()) as T;
     } catch (err: any) {
-      console.warn(`[Forensiwipe API] IPC fetch error on ${endpoint}:`, err.message);
+      console.warn(`[ForensiWipe API] IPC fetch error on ${endpoint}:`, err.message);
       throw err;
     }
   }
@@ -217,5 +217,5 @@ class ForensiwipeClient {
   }
 }
 
-export const apiClient = new ForensiwipeClient();
+export const apiClient = new ForensiWipeClient();
 export default apiClient;

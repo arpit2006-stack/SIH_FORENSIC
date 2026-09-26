@@ -222,7 +222,7 @@ class CertificateData:
     document_name: str
     document_description: str = ""
     raw_offset_bytes: int = 0
-    recovery_method: str = "Forensiwipe AI Carving Engine (signature + SHT + Siamese + Hungarian)"
+    recovery_method: str = "ForensiWipe AI Carving Engine (signature + SHT + Siamese + Hungarian)"
 
     # (b) Device/system particulars
     source_device_identifier: str = "UNKNOWN_DEVICE"
@@ -454,7 +454,7 @@ class BSASection63CertificateGenerator:
         # --- Footer ---
         elements.append(Spacer(1, 6 * mm))
         elements.append(Paragraph(
-            f"<i>Certificate generated at {cert.generated_at} by Forensiwipe AI Engine. "
+            f"<i>Certificate generated at {cert.generated_at} by ForensiWipe AI Engine. "
             f"This document is machine-generated and requires manual dual-signature "
             f"authentication before submission as evidence.</i>",
             small_style,
@@ -474,7 +474,7 @@ class BSASection63CertificateGenerator:
 
         col_widths = [130, 340] if not sig_block else [130, 340]
         t = Table(data, colWidths=col_widths)
-        ts = [
+        ts: list[tuple[Any, ...]] = [
             ("FONTSIZE", (0, 0), (-1, -1), 9),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
@@ -579,7 +579,7 @@ class ForensicCaseReportGenerator:
         # Header
         elements.append(Paragraph("FORENSIC EXAMINATION & CASE REPORT", title_style))
         elements.append(Paragraph(
-            f"Forensiwipe AI Evidence Recovery Engine • Air-Gapped Workstation: {platform.node()}",
+            f"ForensiWipe AI Evidence Recovery Engine • Air-Gapped Workstation: {platform.node()}",
             subtitle_style,
         ))
         elements.append(Spacer(1, 2 * mm))
@@ -608,7 +608,7 @@ class ForensicCaseReportGenerator:
 
         # 2. Evidence Inventory Table
         elements.append(Paragraph("2. Carved Evidence Artifact Inventory", heading_style))
-        inv_data = [
+        inv_data: list[list[Any]] = [
             ["#", "Artifact Name", "MIME Type", "Offset", "Size", "Reliability (S)", "Category", "Priority"]
         ]
         for idx, art in enumerate(artifacts, 1):
@@ -648,7 +648,7 @@ class ForensicCaseReportGenerator:
                 body_style,
             ))
             elements.append(Spacer(1, 1 * mm))
-            triage_rows = [["Artifact", "Category", "SHA-256 Hash", "Reliability"]]
+            triage_rows: list[list[Any]] = [["Artifact", "Category", "SHA-256 Hash", "Reliability"]]
             for a in high_priority:
                 triage_rows.append([
                     Paragraph(f"<b>{a.document_name}</b>", body_style),

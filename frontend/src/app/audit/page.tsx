@@ -264,7 +264,7 @@ function AuditPageContent() {
             <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
               <div className="text-xs uppercase font-mono text-slate-400 font-semibold">Evidence Directory</div>
               <div className="text-xs font-mono font-bold text-teal-800 break-all">
-                A:\SIH\SIH_FORENSIC\recovered_evidence
+                recovered_evidence/
               </div>
               <div className="text-xs text-slate-500">Bit-for-bit physical block dumps with SHA-256 custody seals</div>
             </div>
