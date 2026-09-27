@@ -474,7 +474,7 @@ class BSASection63CertificateGenerator:
 
         col_widths = [130, 340] if not sig_block else [130, 340]
         t = Table(data, colWidths=col_widths)
-        ts: list[tuple[Any, ...]] = [
+        ts: list[Any] = [
             ("FONTSIZE", (0, 0), (-1, -1), 9),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),

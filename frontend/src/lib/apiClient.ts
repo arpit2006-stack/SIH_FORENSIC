@@ -156,12 +156,19 @@ class ForensiWipeClient {
 
   async executeSanitization(payload: {
     devicePath: string;
-    serial: string;
-    method: string;
-    operatorId: string;
-    caseId: string;
+    serial?: string;
+    serialConfirmation?: string;
+    model?: string;
+    modelConfirmation?: string;
+    method?: string;
+    selectedMethod?: string;
+    operatorId?: string;
+    caseId?: string;
+    reason?: string;
     passphrase?: string;
     allowLiveExecution?: boolean;
+    explicitDestructiveConfirmation?: boolean;
+    executionMode?: string;
   }): Promise<{ status: string; report: SanitizationReport }> {
     return this.request("/api/sanitization/execute", {
       method: "POST",

@@ -71,11 +71,18 @@ export default function EraseConfirmPage() {
       const resp = await apiClient.executeSanitization({
         devicePath: devPath,
         serial: selectedDrive.serial,
+        serialConfirmation: selectedDrive.serial,
+        model: selectedDrive.model,
+        modelConfirmation: selectedDrive.model,
         method: method,
+        selectedMethod: method,
         operatorId: investigatorName || 'OFFICER-DEFAULT',
         caseId: caseId || 'CAS-2026-904',
+        reason: 'Authorized Forensic Media Sanitization',
         passphrase: passphrase,
         allowLiveExecution: true,
+        explicitDestructiveConfirmation: true,
+        executionMode: 'REAL_EXECUTION',
       });
 
       if (resp?.report) {

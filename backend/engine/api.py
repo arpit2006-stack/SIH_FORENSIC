@@ -30,6 +30,7 @@ from PIL import Image
 from engine.pretrain_utils import BLOCK_SIZE
 from engine.triage_scorer import FastBlockTriage, NOISE_IDX
 from engine.signature_carver import carve, Stream
+from engine.carver_ml import SiameseAdjacency
 from engine.graph_reassembly import GlobalFragmentResolver, validate_carve
 from engine.report_gen import (
     ForensicReliabilityScorer,
@@ -133,11 +134,17 @@ class CarvingApiRouter:
         self.jobs: dict[str, CarvingJob] = {}
         self.scorer = ForensicReliabilityScorer()
         self._triage: FastBlockTriage | None = None
+        self._siamese: SiameseAdjacency | None = None
 
     def _get_triage(self) -> FastBlockTriage:
         if self._triage is None:
             self._triage = FastBlockTriage()
         return self._triage
+
+    def _get_siamese(self) -> SiameseAdjacency:
+        if self._siamese is None:
+            self._siamese = SiameseAdjacency()
+        return self._siamese
 
     def _create_synthetic_forensic_image(self) -> np.ndarray:
         """Create an in-memory 100-block synthetic disk image with fragmented JPEG and PDF."""
@@ -350,7 +357,8 @@ class CarvingApiRouter:
             job.status = "REASSEMBLING"
             job.progress_percent = 80
             try:
-                resolver = GlobalFragmentResolver()
+                siamese = self._get_siamese()
+                resolver = GlobalFragmentResolver(siamese=siamese)
                 candidate_orphans = [b for b in carve_res.orphans if image[b].any()][:200]
                 if candidate_orphans:
                     orphan_bytes: list[bytes] = [image[blk].tobytes() for blk in candidate_orphans]
@@ -365,7 +373,14 @@ class CarvingApiRouter:
                             continue
 
                         is_valid, reason = verify_carved_file(raw_data, chain.mime)
-                        score_res = self.scorer.score(data=raw_data, mime=chain.mime)
+                        score_res = self.scorer.score(
+                            data=raw_data,
+                            mime=chain.mime,
+                            fragments=orphan_bytes,
+                            chain_order=chain.order,
+                            chain_residual=chain.residual,
+                            siamese=siamese,
+                        )
 
                         # Strict Rejection Gate: Discard unopenable or low-confidence reassembled files
                         if not is_valid or score_res.S < 0.65:

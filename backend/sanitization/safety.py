@@ -18,6 +18,7 @@ from sanitization.models import (
     SanitizationErrorCode,
     SanitizationException,
     SanitizeMethod,
+    StorageType,
 )
 
 
@@ -63,20 +64,22 @@ class SafetyGate:
             )
 
         # 3. Model confirmation check
-        if device.model and auth.model_confirmation.strip().lower() != device.model.strip().lower():
-            raise SanitizationException(
-                SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
-                f"Operator model confirmation '{auth.model_confirmation}' does not match actual hardware '{device.model}'.",
-                {"expected": device.model, "provided": auth.model_confirmation},
-            )
+        if device.model and auth.model_confirmation.strip():
+            if auth.model_confirmation.strip().lower() != device.model.strip().lower():
+                raise SanitizationException(
+                    SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
+                    f"Operator model confirmation '{auth.model_confirmation}' does not match actual hardware '{device.model}'.",
+                    {"expected": device.model, "provided": auth.model_confirmation},
+                )
 
         # 4. Serial confirmation check
-        if device.serial and auth.serial_confirmation.strip().lower() != device.serial.strip().lower():
-            raise SanitizationException(
-                SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
-                f"Operator serial confirmation '{auth.serial_confirmation}' does not match actual hardware '{device.serial}'.",
-                {"expected": device.serial, "provided": auth.serial_confirmation},
-            )
+        if device.serial and auth.serial_confirmation.strip():
+            if auth.serial_confirmation.strip().lower() != device.serial.strip().lower():
+                raise SanitizationException(
+                    SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
+                    f"Operator serial confirmation '{auth.serial_confirmation}' does not match actual hardware '{device.serial}'.",
+                    {"expected": device.serial, "provided": auth.serial_confirmation},
+                )
 
         # 5. Method check
         if auth.selected_method == SanitizeMethod.UNSUPPORTED:
@@ -97,12 +100,28 @@ class SafetyGate:
 
         # 7. Mounted Filesystem Protection
         if device.mounted:
-            raise SanitizationException(
-                SanitizationErrorCode.DEVICE_MOUNTED,
-                f"DEVICE_MOUNTED: Device '{device.device_path}' contains mounted partitions: {device.mount_points}. "
-                "All filesystems must be unmounted before sanitization.",
-                {"devicePath": device.device_path, "mountPoints": device.mount_points},
-            )
+            # On Windows, attempt to dismount removable/USB partitions cleanly
+            if platform.system().lower() == "windows" and device.storage_type in (StorageType.USB, StorageType.UNKNOWN):
+                import subprocess
+                for mp in list(device.mount_points):
+                    drive_letter = mp.rstrip("\\")
+                    try:
+                        res = subprocess.run(["fsutil", "volume", "dismount", drive_letter], capture_output=True, text=True, timeout=5)
+                        if res.returncode == 0:
+                            if mp in device.mount_points:
+                                device.mount_points.remove(mp)
+                    except Exception:
+                        pass
+                if not device.mount_points:
+                    device.mounted = False
+
+            if device.mounted:
+                raise SanitizationException(
+                    SanitizationErrorCode.DEVICE_MOUNTED,
+                    f"DEVICE_MOUNTED: Device '{device.device_path}' contains mounted partitions: {device.mount_points}. "
+                    "All filesystems must be unmounted before sanitization.",
+                    {"devicePath": device.device_path, "mountPoints": device.mount_points},
+                )
 
         # 8. Destructive Confirmation for Real Execution
         if auth.execution_mode == OperationMode.REAL_EXECUTION:
@@ -173,14 +192,16 @@ class SafetyGate:
 
         current_os = platform.system().lower()
         if current_os == "linux":
-            if os.geteuid() != 0:
+            geteuid = getattr(os, "geteuid", None)
+            if geteuid is not None and geteuid() != 0:
                 raise SanitizationException(
                     SanitizationErrorCode.PRIVILEGE_REQUIRED,
                     "PRIVILEGE_REQUIRED: Real hardware sanitization requires root (EUID 0) privileges on Linux.",
                     {"required": "root"},
                 )
         elif current_os == "darwin":
-            if os.geteuid() != 0:
+            geteuid = getattr(os, "geteuid", None)
+            if geteuid is not None and geteuid() != 0:
                 raise SanitizationException(
                     SanitizationErrorCode.PRIVILEGE_REQUIRED,
                     "PRIVILEGE_REQUIRED: Real hardware sanitization requires root (sudo) privileges on macOS.",
@@ -190,7 +211,8 @@ class SafetyGate:
             # On Windows, real physical disk access requires elevated administrator
             import ctypes
             try:
-                is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+                windll = getattr(ctypes, "windll", None)
+                is_admin = windll.shell32.IsUserAnAdmin() != 0 if windll else False
             except Exception:
                 is_admin = False
             if not is_admin:

@@ -26,8 +26,20 @@ from engine.triage_scorer import calculate_shannon_entropy
 
 log = logging.getLogger(__name__)
 
+def _resolve_model_path(filename: str = "siamese_adjacency.onnx") -> str:
+    candidates = [
+        Path(__file__).resolve().parent.parent / "models" / filename,
+        Path("backend/models") / filename,
+        Path("models") / filename,
+    ]
+    for p in candidates:
+        if p.is_file():
+            return str(p.resolve())
+    return os.path.join("models", filename)
+
+
 WINDOW = 256
-SIAMESE_MODEL_PATH = "models/siamese_adjacency.onnx"
+SIAMESE_MODEL_PATH = _resolve_model_path("siamese_adjacency.onnx")
 _MIME_OF = {"jpeg": "image/jpeg", "pdf": "application/pdf", "zip": "application/zip"}
 _OBJ_RE = re.compile(rb"(?<![0-9])(\d{1,7}) 0 obj\b")
 

@@ -21,7 +21,19 @@ log = logging.getLogger(__name__)
 
 CLASSES = ("TEXT", "IMAGE_MEDIA", "COMPRESSED_ENCRYPTED", "NOISE_EMPTY")
 NOISE_IDX = CLASSES.index("NOISE_EMPTY")
-DEFAULT_MODEL_PATH = "models/block_classifier.onnx"
+def _resolve_model_path(filename: str = "block_classifier.onnx") -> str:
+    candidates = [
+        Path(__file__).resolve().parent.parent / "models" / filename,
+        Path("backend/models") / filename,
+        Path("models") / filename,
+    ]
+    for p in candidates:
+        if p.is_file():
+            return str(p.resolve())
+    return os.path.join("models", filename)
+
+
+DEFAULT_MODEL_PATH = _resolve_model_path("block_classifier.onnx")
 ENTROPY_BYPASS = 0.5
 ZERO_FRAC_BYPASS = 0.95
 
@@ -195,7 +207,7 @@ def export_to_onnx(model, export_path: str = DEFAULT_MODEL_PATH) -> str:
     Path(export_path).parent.mkdir(parents=True, exist_ok=True)
     model.eval()
     dummy = torch.zeros(1, 1, BLOCK_SIZE)
-    torch.onnx.export(model, dummy, export_path, input_names=["blocks"], output_names=["logits"],
+    torch.onnx.export(model, dummy , export_path, input_names=["blocks"], output_names=["logits"],
                       dynamic_axes={"blocks": {0: "batch"}, "logits": {0: "batch"}},
                       opset_version=17, dynamo=False)
     log.info("exported %s (%d KB)", export_path, os.path.getsize(export_path) // 1024)

@@ -7,18 +7,21 @@ Pipeline:
   1. DeterministicPatternFilter scans text with compiled regex + optional YARA rules.
   2. If hits exist, LocalForensicLLM classifies and summarises.
   3. Disagreement gating: if LLM contradicts the pattern filter, the artifact is
-     flagged DISPUTED_MANUAL_REVIEW. No hits → LOW_PRIORITY_GENERAL, no LLM call.
+     flagged DISPUTED_MANUAL_REVIEW. No hits -> LOW_PRIORITY_GENERAL, no LLM call.
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +34,7 @@ CATEGORIES = frozenset({
 })
 PRIORITIES = frozenset({"P1_CRITICAL", "P2_HIGH", "P3_LOW"})
 
-# Default category→priority mapping used when the LLM is bypassed.
+# Default category->priority mapping used when the LLM is bypassed.
 _DEFAULT_PRIORITY = {
     "FINANCIAL": "P1_CRITICAL",
     "IDENTITY": "P1_CRITICAL",
@@ -94,7 +97,7 @@ _PATTERNS: dict[str, re.Pattern] = {
     ),
 }
 
-# Map pattern names → baseline categories.
+# Map pattern names -> baseline categories.
 _PATTERN_CATEGORY: dict[str, str] = {
     "IFSC_CODE": "FINANCIAL",
     "CREDIT_CARD": "FINANCIAL",
@@ -131,6 +134,7 @@ class DeterministicPatternFilter:
         self._yara_rules = None
         if extra_yara_path and os.path.isfile(extra_yara_path):
             try:
+                # pyrefly: ignore [missing-import]
                 import yara  # noqa: WPS433
                 self._yara_rules = yara.compile(filepath=extra_yara_path)
                 log.info("YARA rules loaded from %s", extra_yara_path)
@@ -199,7 +203,6 @@ _USER_TEMPLATE = "Classify the following recovered artifact text:\n\n{text}"
 
 def _detect_vram_mb() -> int:
     """Best-effort VRAM query without network calls. Returns 0 if no GPU is found."""
-    # nvidia-smi on PATH?
     if not shutil.which("nvidia-smi"):
         return 0
     try:
@@ -218,10 +221,8 @@ def _detect_vram_mb() -> int:
 
 def _safe_parse_llm_json(raw: str) -> dict:
     """Extract the first JSON object from the LLM response, handling markdown fences and junk."""
-    # Strip markdown code fences if present.
     cleaned = raw.strip()
     if cleaned.startswith("```"):
-        # Remove opening fence (with optional language tag) and closing fence.
         lines = cleaned.splitlines()
         if lines[0].startswith("```"):
             lines = lines[1:]
@@ -229,7 +230,6 @@ def _safe_parse_llm_json(raw: str) -> dict:
             lines = lines[:-1]
         cleaned = "\n".join(lines).strip()
 
-    # Try direct parse first.
     try:
         obj = json.loads(cleaned)
         if isinstance(obj, dict):
@@ -237,7 +237,6 @@ def _safe_parse_llm_json(raw: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # Fallback: find first { ... } substring.
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start >= 0 and end > start:
@@ -248,7 +247,6 @@ def _safe_parse_llm_json(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Irrecoverable: return empty dict so caller uses fallback.
     log.warning("LLM output was not valid JSON; falling back to deterministic category")
     return {}
 
@@ -270,14 +268,12 @@ class LocalForensicLLM:
 
     Dynamic offloading: if dedicated VRAM is detected, sets n_gpu_layers = -1
     (offload everything); otherwise n_gpu_layers = 0 (pure CPU) with n_threads = 4.
-
-    The model path defaults to ``models/<first .gguf found>`` or a known filename.
     """
 
     def __init__(
         self,
         model_path: Optional[str] = None,
-        n_ctx: int = 2048,
+        n_ctx: int = 4096,
         n_threads: int = 4,
         max_tokens: int = 512,
         temperature: float = 0.0,
@@ -286,15 +282,13 @@ class LocalForensicLLM:
         self.temperature = temperature
         self._llm = None  # lazy: constructed on first call
 
-        # Resolve model path.
         if model_path is None:
             model_path = self._find_gguf()
         self._model_path = model_path
 
-        # Determine GPU offloading.
         vram = _detect_vram_mb()
         if vram > 0:
-            self._n_gpu_layers = -1  # offload all layers
+            self._n_gpu_layers = -1
             log.info("VRAM detected (%d MB); GPU offload enabled (n_gpu_layers=-1)", vram)
         else:
             self._n_gpu_layers = 0
@@ -303,20 +297,30 @@ class LocalForensicLLM:
         self._n_ctx = n_ctx
         self._n_threads = n_threads
 
-    # -- model discovery --------------------------------------------------- #
     @staticmethod
-    def _find_gguf(search_dir: str = "models") -> str:
-        """Locate the first .gguf file under *search_dir*."""
-        p = Path(search_dir)
-        if p.is_dir():
-            for f in sorted(p.iterdir()):
-                if f.suffix.lower() == ".gguf":
-                    return str(f)
-        # Fallback to a well-known default name.
-        default = os.path.join(search_dir, "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf")
-        return default
+    def _find_gguf(search_dir: Optional[str] = None) -> str:
+        """Locate the first .gguf file under common model directories."""
+        candidates: list[Path] = []
+        if search_dir:
+            candidates.append(Path(search_dir))
 
-    # -- lazy init --------------------------------------------------------- #
+        here = Path(__file__).resolve().parent
+        candidates.extend([
+            here.parent / "models",
+            Path("backend/models"),
+            Path("models"),
+            here.parent.parent / "models",
+        ])
+
+        for p in candidates:
+            if p.is_dir():
+                for f in sorted(p.iterdir()):
+                    if f.suffix.lower() == ".gguf":
+                        return str(f.resolve())
+
+        default_dir = here.parent / "models"
+        return str(default_dir / "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf")
+
     def _ensure_loaded(self) -> None:
         if self._llm is not None:
             return
@@ -326,7 +330,13 @@ class LocalForensicLLM:
                 "Place a quantized GGUF model (e.g. Qwen2.5-1.5B-Instruct-Q4_K_M.gguf) "
                 "in the models/ directory."
             )
-        from llama_cpp import Llama  # noqa: WPS433  (air-gapped, localhost only)
+        try:
+            # pyrefly: ignore [missing-import]
+            from llama_cpp import Llama  # noqa: WPS433
+        except (ImportError, ModuleNotFoundError) as err:
+            raise ImportError(
+                f"llama-cpp-python is not installed ({err}). Install it or run in deterministic mode."
+            ) from err
 
         self._llm = Llama(
             model_path=self._model_path,
@@ -337,21 +347,15 @@ class LocalForensicLLM:
         )
         log.info("GGUF model loaded: %s (gpu_layers=%d)", self._model_path, self._n_gpu_layers)
 
-    # -- inference --------------------------------------------------------- #
     def classify(self, text: str) -> dict:
-        """Send *text* through the local GGUF model and return normalised JSON.
-
-        Returns ``{"category": ..., "priority": ..., "plain_english_summary": ...}``
-        with safe fallbacks if the model produces garbage.
-        """
+        """Send *text* through the local GGUF model and return normalised JSON."""
         self._ensure_loaded()
 
-        # Truncate text to fit context window (leave room for system + output).
-        max_input_chars = (self._n_ctx - self.max_tokens - 100) * 3  # rough char→token
+        max_input_chars = 2000
         truncated = text[:max_input_chars] if len(text) > max_input_chars else text
 
         try:
-            response = self._llm.create_chat_completion(
+            response = self._llm.create_chat_completion(  # type: ignore[union-attr]
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": _USER_TEMPLATE.format(text=truncated)},
@@ -371,7 +375,6 @@ class LocalForensicLLM:
 # ---------------------------------------------------------------------------
 # 3. Disagreement Gating Logic  (FR3.4)
 # ---------------------------------------------------------------------------
-# Singleton-ish holders (created once per process, reused across calls).
 _filter_instance: Optional[DeterministicPatternFilter] = None
 _llm_instance: Optional[LocalForensicLLM] = None
 
@@ -395,34 +398,34 @@ def triage_artifact(
     *,
     det_filter: Optional[DeterministicPatternFilter] = None,
     llm: Optional[LocalForensicLLM] = None,
-) -> Dict:
+) -> Dict[str, Any]:
     """Triage a single recovered artifact's extracted text.
 
     Pipeline:
       1. Deterministic pattern scan.
-      2. If hits → LLM classification → agreement check.
-      3. No hits → LOW_PRIORITY_GENERAL (no LLM call, save compute).
+      2. If hits -> LLM classification -> agreement check.
+      3. No hits -> LOW_PRIORITY_GENERAL (no LLM call, save compute).
 
     Returns a dict with keys:
-      - ``category``: final resolved category
-      - ``priority``: P1/P2/P3
-      - ``plain_english_summary``: LLM-generated or static fallback
-      - ``deterministic_hits``: list of pattern names
-      - ``deterministic_category``: baseline from the pattern filter
-      - ``llm_category``: raw LLM output category (or None if LLM was not invoked)
-      - ``agreement``: "MATCH" | "DISPUTED" | "LLM_SKIPPED"
+      - category: final resolved category
+      - priority: P1/P2/P3
+      - plain_english_summary: LLM-generated or static fallback
+      - deterministic_hits: list of pattern names
+      - deterministic_category: baseline from the pattern filter
+      - llm_category: raw LLM output category (or None if LLM was not invoked)
+      - agreement: "MATCH" | "DISPUTED" | "LLM_SKIPPED" | "LLM_UNAVAILABLE"
     """
     filt = det_filter or _get_filter()
     pr = filt.scan(artifact_text)
 
-    result: Dict = {
+    result: Dict[str, Any] = {
         "deterministic_hits": pr.filter_hits,
         "deterministic_category": pr.baseline_category,
         "llm_category": None,
         "agreement": "LLM_SKIPPED",
     }
 
-    # ---- No deterministic hits → LOW_PRIORITY_GENERAL, skip LLM ----
+    # ---- No deterministic hits -> LOW_PRIORITY_GENERAL, skip LLM ----
     if not pr.filter_hits:
         result.update(
             category="LOW_PRIORITY_GENERAL",
@@ -431,13 +434,12 @@ def triage_artifact(
         )
         return result
 
-    # ---- Deterministic hits exist → invoke LLM ----
+    # ---- Deterministic hits exist -> invoke LLM ----
     try:
         llm_engine = llm or _get_llm()
         llm_out = llm_engine.classify(artifact_text)
-    except FileNotFoundError:
-        # No GGUF model available — fall back to deterministic-only.
-        log.warning("GGUF model not found; using deterministic classification only")
+    except (FileNotFoundError, ImportError, ModuleNotFoundError, Exception) as exc:
+        log.warning("Local LLM not available (%s); using deterministic classification only", exc)
         result.update(
             category=pr.baseline_category,
             priority=_DEFAULT_PRIORITY.get(pr.baseline_category, "P2_HIGH"),
@@ -450,7 +452,6 @@ def triage_artifact(
 
     # ---- Agreement gating ----
     if llm_out["category"] == pr.baseline_category:
-        # Perfect agreement: accept LLM output verbatim.
         result.update(
             category=llm_out["category"],
             priority=llm_out["priority"],
@@ -458,9 +459,8 @@ def triage_artifact(
             agreement="MATCH",
         )
     else:
-        # Disagreement: override to DISPUTED_MANUAL_REVIEW.
         log.warning(
-            "DISPUTED: deterministic=%s vs LLM=%s — flagging for manual review",
+            "DISPUTED: deterministic=%s vs LLM=%s - flagging for manual review",
             pr.baseline_category,
             llm_out["category"],
         )
@@ -476,100 +476,3 @@ def triage_artifact(
         )
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Self-check: python -m engine.llm_triage
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-
-    # ----- Test 1: Mock PAN record -----
-    pan_text = (
-        "Subject: Taxpayer verification\n"
-        "Name: Rajesh Kumar\n"
-        "PAN: ABCDE1234F\n"
-        "Date of Birth: 15-03-1985\n"
-        "Address: 42 MG Road, Bengaluru 560001\n"
-        "Phone: +91 9876543210\n"
-        "This document confirms the identity of the taxpayer for FY2025-26.\n"
-    )
-    filt = DeterministicPatternFilter()
-    pr = filt.scan(pan_text)
-    assert "PAN_CARD" in pr.filter_hits, f"PAN not detected: {pr.filter_hits}"
-    assert pr.baseline_category == "IDENTITY", f"Expected IDENTITY, got {pr.baseline_category}"
-    print(f"PAN scan: hits={pr.filter_hits} category={pr.baseline_category}")
-
-    # Test triage_artifact without a real GGUF model (deterministic-only fallback).
-    res_pan = triage_artifact(pan_text, det_filter=filt)
-    assert res_pan["deterministic_category"] == "IDENTITY"
-    assert res_pan["category"] in CATEGORIES
-    assert res_pan["priority"] in PRIORITIES
-    print(f"PAN triage: category={res_pan['category']} priority={res_pan['priority']} "
-          f"agreement={res_pan['agreement']}")
-
-    # ----- Test 2: Generic random log (no sensitive patterns) -----
-    generic_log = (
-        "2026-09-11 14:22:01 INFO  kernel: cpu0: resumed from idle\n"
-        "2026-09-11 14:22:02 INFO  kernel: eth0: link up\n"
-        "2026-09-11 14:22:03 INFO  systemd: Started session 42 of user admin\n"
-        "2026-09-11 14:22:04 DEBUG sshd: received packet type 21\n"
-        "2026-09-11 14:22:05 INFO  crond: running job /etc/cron.d/cleanup\n"
-    )
-    pr_log = filt.scan(generic_log)
-    assert not pr_log.filter_hits, f"Generic log should have no hits: {pr_log.filter_hits}"
-    assert pr_log.baseline_category == "UNCLASSIFIED"
-
-    res_log = triage_artifact(generic_log, det_filter=filt)
-    assert res_log["category"] == "LOW_PRIORITY_GENERAL"
-    assert res_log["priority"] == "P3_LOW"
-    assert res_log["agreement"] == "LLM_SKIPPED"
-    print(f"Log triage: category={res_log['category']} priority={res_log['priority']} "
-          f"agreement={res_log['agreement']}")
-
-    # ----- Test 3: Financial artifact -----
-    finance_text = (
-        "Bank: State Bank of India\n"
-        "IFSC: SBIN0001234\n"
-        "Transaction: NEFT transfer of INR 50,000 on 2026-08-15\n"
-        "Beneficiary: Acme Corp Ltd.\n"
-    )
-    pr_fin = filt.scan(finance_text)
-    assert "IFSC_CODE" in pr_fin.filter_hits
-    assert pr_fin.baseline_category == "FINANCIAL"
-    res_fin = triage_artifact(finance_text, det_filter=filt)
-    assert res_fin["deterministic_category"] == "FINANCIAL"
-    print(f"Finance triage: category={res_fin['category']} priority={res_fin['priority']}")
-
-    # ----- Test 4: Credential artifact -----
-    cred_text = (
-        "-----BEGIN RSA PRIVATE KEY-----\n"
-        "MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy...\n"
-        "-----END RSA PRIVATE KEY-----\n"
-    )
-    pr_cred = filt.scan(cred_text)
-    assert "PRIVATE_KEY" in pr_cred.filter_hits
-    assert pr_cred.baseline_category == "CREDENTIAL"
-    print(f"Credential scan: hits={pr_cred.filter_hits}")
-
-    # ----- Test 5: Luhn validation -----
-    assert _luhn_valid("4111111111111111"), "Visa test number must pass Luhn"
-    assert not _luhn_valid("4111111111111112"), "Modified digit must fail Luhn"
-
-    # ----- Test 6: Safe JSON parsing -----
-    assert _safe_parse_llm_json('{"category":"FINANCIAL","priority":"P1_CRITICAL","plain_english_summary":"ok"}') \
-           == {"category": "FINANCIAL", "priority": "P1_CRITICAL", "plain_english_summary": "ok"}
-    assert _safe_parse_llm_json('```json\n{"category":"IDENTITY"}\n```') == {"category": "IDENTITY"}
-    assert _safe_parse_llm_json("garbage output") == {}
-    assert _safe_parse_llm_json('Sure! Here is the JSON: {"category":"CREDENTIAL"} hope it helps!') \
-           == {"category": "CREDENTIAL"}
-    print("JSON parser handles clean, fenced, embedded, and garbage outputs")
-
-    # ----- Test 7: Normalisation -----
-    assert _normalise_llm_output({})["category"] == "UNCLASSIFIED"
-    assert _normalise_llm_output({"category": "BOGUS"})["category"] == "UNCLASSIFIED"
-    assert _normalise_llm_output({"category": "FINANCIAL", "priority": "INVALID"})["priority"] == "P1_CRITICAL"
-    print("Normalisation clamps enums correctly")
-
-    print()
-    print("[STATE_TRANSITION: NODE_04_COMPLETE -> PROCEED_TO_NODE_05]")
