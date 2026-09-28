@@ -127,6 +127,18 @@ def _jpeg_tests(d: bytes) -> list:
                 t.append((False, *_P_FATAL, min(rst_bad, 12)))   # RSTn must cycle 0..7
             else:
                 t.append((True, 0.99, 0.15, min(rst // 8 + 1, 6)))
+
+        # NOT IMPLEMENTED: whole-stream contamination detection for JPEG. Two approaches
+        # were measured this iteration and BOTH rejected:
+        #  1. 0xFF density per 4 KB of scan. Real scan data carries 170-304 per window
+        #     while filler / zeros / ASCII / PDF body carry 0 — but flat grey and
+        #     gradient JPEGs also carry 0 across every window, so it false-positives on
+        #     exactly the screenshots and document scans forensics sees most.
+        #  2. Decode the scan and compare against ceil(W/8Hmax)*ceil(H/8Vmax) MCUs.
+        #     Blocked: JpegContext.count_mcus returns (1, False) for EVERY jpeg tested,
+        #     valid ones included — it does not work for whole-stream decoding.
+        # Consequence: a JPEG with foreign sectors swallowed into its scan still scores
+        # C_struct = 1.0000 and is labelled OPEN_VERIFIED. See bench/ITERATION_LOG.md.
     t.append((d.rstrip(b"\0").endswith(b"\xff\xd9"), 0.98, 0.3))
     return t
 
@@ -144,7 +156,14 @@ def _pdf_tests(d: bytes) -> list:
         m = re.match(rb"\s*(\d+)", d[sx + 9:sx + 32])
         off = int(m.group(1)) if m else -1
         target = d[off:off + 32] if 0 <= off < len(d) else b""
-        t.append((target.startswith(b"xref") or bool(_OBJ_RE.match(target)), *_P_FATAL))  # /XRef target
+        # weight 3: startxref resolving to an xref table or an object is a hard PDF
+        # invariant — if it misses, bytes have been inserted or removed, full stop.
+        # At weight 1 a single failure (LLR -4.60) was outvoted by five cheap passing
+        # tests (+6.69), so a stream with 12 KB of foreign sectors swallowed between
+        # its halves scored C_struct = 0.8901 and cleared the 0.85 coherence gate
+        # instead of being demoted to the reassembly pool. Measured on bench/matrix.py
+        # `fragmented` cell.
+        t.append((target.startswith(b"xref") or bool(_OBJ_RE.match(target)), *_P_FATAL, 3.0))
     else:
         t.append((False, *_P_FATAL))
     t.append((b"%%EOF" in d[-64:].rstrip(b"\0") or d.rstrip(b"\0").endswith(b"%%EOF"), 0.98, 0.1))
@@ -196,8 +215,10 @@ class JpegContext:
     Baseline (SOF0/SOF1) only; progressive returns None from `parse`.
     """
 
-    def __init__(self, huff: dict, comps: list, dri: int, sos_tables: dict, scan_start: int):
+    def __init__(self, huff: dict, comps: list, dri: int, sos_tables: dict, scan_start: int,
+                 width: int = 0, height: int = 0):
         self.huff, self.comps, self.dri, self.sos_tables, self.scan_start = huff, comps, dri, sos_tables, scan_start
+        self.width, self.height = width, height
         # blocks per MCU per component, in scan order
         if len(comps) == 1:
             self.mcu_layout = [(comps[0][0], 1)]
@@ -209,10 +230,12 @@ class JpegContext:
         if d[:2] != b"\xff\xd8":
             return None
         huff, comps, dri, sos_tables, pos = {}, [], 0, {}, 2
+        sof_h = sof_w = 0
         while pos + 4 <= len(d) and d[pos] == 0xFF:
             marker, seg_len = d[pos + 1], int.from_bytes(d[pos + 2:pos + 4], "big")
             seg = d[pos + 4:pos + 2 + seg_len]
             if marker in (0xC0, 0xC1):                       # SOF0/1 baseline
+                sof_h, sof_w = int.from_bytes(seg[1:3], "big"), int.from_bytes(seg[3:5], "big")
                 for k in range(seg[5]):
                     cid, hv = seg[6 + 3 * k], seg[7 + 3 * k]
                     comps.append((cid, hv >> 4, hv & 15))
@@ -245,8 +268,14 @@ class JpegContext:
         else:
             return None
         if not comps or not huff or not sos_tables or dri == 0:
+            # NOTE: this dri == 0 bail means parse() returns None for every JPEG without
+            # restart markers — which is most of them, since PIL and the common camera
+            # encoders emit no DRI. The whole MCU-decode path therefore never fires in
+            # production. Relaxing the guard was tried and reverted: count_mcus is itself
+            # non-functional (returns 1 MCU for valid images), so lifting it only
+            # surfaced that. Both need fixing together to be worth anything.
             return None
-        return cls(huff, comps, dri, sos_tables, pos)
+        return cls(huff, comps, dri, sos_tables, pos, sof_w, sof_h)
 
     def count_mcus(self, data: bytes) -> tuple[int, bool]:
         """Decode entropy-coded `data` (no markers inside). Returns (complete_mcus, clean_end)."""
@@ -421,6 +450,39 @@ class PdfContext:
         return best if n >= 2 or len(votes) == 1 else None
 
 
+def _repeat_unit(w: bytes, max_period: int = 128) -> bytes:
+    """Shortest string whose repetition reproduces `w` exactly, or b"" if `w` is not periodic.
+
+    Used for phase-continuous periodicity: raw "is this block periodic" is NOT a valid
+    filler detector, because legitimate file content is often periodic too (a PDF /Note
+    padding object repeats one phrase for 9 blocks). What distinguishes real adjacency
+    from a swallowed sector is whether the successor *continues the same repetition in
+    phase* — filler starts its own unrelated cycle.
+    """
+    if not w:
+        return b""
+    for p in range(1, min(max_period, len(w)) + 1):
+        unit = w[:p]
+        if w == (unit * (len(w) // p + 1))[:len(w)]:
+            return unit
+    return b""
+
+
+def _period_continues(ia: "_FragInfo", ib: "_FragInfo") -> bool | None:
+    """True if B's head continues A's tail repetition in phase; None if not applicable."""
+    unit = ia.tail_period
+    if not unit or len(unit) > 128:
+        return None
+    n = min(len(ib.head_256), 256)
+    if n < len(unit) * 2:
+        return None
+    # A's last 256 bytes are `unit` repeated; the phase at the end of A determines
+    # which byte of `unit` B must start with.
+    phase = (256 % len(unit))
+    expect = (unit[phase:] + unit * (n // len(unit) + 2))[:n]
+    return ib.head_256[:n] == expect
+
+
 class _FragInfo:
     """Per-fragment markers, windows and entropies, computed once instead of per pair.
 
@@ -428,7 +490,7 @@ class _FragInfo:
     """
     __slots__ = ("raw", "rst", "tail_seg", "eoi", "soi", "header", "ends_footer", "ends_ff",
                  "ends_zeros", "ent_tail", "ent_head", "objs", "open_stream", "first_endstream",
-                 "first_obj_at", "zip_next", "pin")
+                 "first_obj_at", "zip_next", "pin", "tail_period", "head_256")
 
     def __init__(self, f: bytes):
         self.raw = f
@@ -448,6 +510,8 @@ class _FragInfo:
         last_stream, last_end = f.rfind(b"stream"), f.rfind(b"endstream")
         self.open_stream = last_stream > last_end
         self.first_endstream = f.find(b"endstream")
+        self.tail_period = _repeat_unit(f[-256:])
+        self.head_256 = f[:256]
         self.zip_next = -1
         pos = f.rfind(b"PK\x03\x04")
         if pos >= 0 and pos + 30 <= len(f):
@@ -498,6 +562,12 @@ def sht_pair_affinity(a: bytes, b: bytes, mime: str | None = None, ctx: dict | N
     t.append((abs(ia.ent_tail - ib.ent_head) < 1.0, 0.9, 0.45))
     if ia.ends_zeros:
         t.append((b[0] == 0 or ib.ent_head < 1.0, 0.8, 0.3))     # slack run continues or the file ended
+    pc = _period_continues(ia, ib)
+    if pc is not None:
+        # A ends inside a repeating run. Either B continues that exact run in phase
+        # (legitimate padding spanning a block boundary) or B is a different block
+        # entirely — which is what a swallowed filler sector looks like.
+        t.append((pc, 0.97, 0.06))
 
     mimes = [mime] if mime else list(SIGNATURES)
     if "image/jpeg" in mimes:

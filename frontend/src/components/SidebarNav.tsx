@@ -11,6 +11,7 @@ import {
   Eraser,
   FileText,
 } from "lucide-react";
+import { useSession } from "@/context/SessionContext";
 
 const NAV_ITEMS = [
   {
@@ -43,17 +44,24 @@ const NAV_ITEMS = [
   },
 ];
 
-export default function SidebarNav() {
+interface SidebarNavProps {
+  collapsed?: boolean;
+}
+
+export default function SidebarNav({ collapsed = false }: SidebarNavProps) {
   const pathname = usePathname();
 
   return (
-    <nav className="flex-1 p-4 space-y-6 overflow-y-auto">
+    <nav className="flex-1 p-3 space-y-4 overflow-y-auto overflow-x-hidden">
       {NAV_ITEMS.map((group, gi) => (
-        <div key={gi} className="space-y-2">
-          {group.section && (
-            <h3 className="px-4 text-xs font-semibold text-slate-500 tracking-wider uppercase">
+        <div key={gi} className="space-y-1">
+          {group.section && !collapsed && (
+            <h3 className="px-3 text-[11px] font-semibold text-slate-500 tracking-wider uppercase mb-1">
               {group.section}
             </h3>
+          )}
+          {group.section && collapsed && (
+            <div className="my-2 border-t border-slate-800/80 mx-2" />
           )}
           <div className="space-y-1">
             {group.items.map((item) => {
@@ -66,16 +74,35 @@ export default function SidebarNav() {
                 <Link
                   key={item.href + item.label}
                   href={item.href}
-                  className={`flex items-center px-4 py-2.5 rounded-md font-medium transition-colors ${
+                  title={collapsed ? item.label : undefined}
+                  className={`flex items-center rounded-lg font-medium transition-all group relative ${
+                    collapsed
+                      ? "justify-center p-2.5"
+                      : "px-3 py-2 text-sm"
+                  } ${
                     isActive
-                      ? "bg-slate-800 text-white shadow-sm"
-                      : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                      ? "bg-slate-800 text-white shadow-sm ring-1 ring-slate-700/60"
+                      : "text-slate-300 hover:bg-slate-800/70 hover:text-white"
                   }`}
                 >
                   <Icon
-                    className={`w-4 h-4 mr-3 ${isActive ? item.accent : "text-slate-400"}`}
+                    className={`w-4 h-4 shrink-0 transition-transform group-hover:scale-110 ${
+                      isActive ? item.accent : "text-slate-400 group-hover:text-slate-200"
+                    } ${!collapsed ? "mr-3" : ""}`}
                   />
-                  {item.label}
+                  {!collapsed && (
+                    <span className="truncate whitespace-nowrap">{item.label}</span>
+                  )}
+                  {isActive && !collapsed && (
+                    <div className="ml-auto w-1.5 h-1.5 rounded-full bg-teal-400"></div>
+                  )}
+
+                  {/* Tooltip for collapsed mode */}
+                  {collapsed && (
+                    <div className="fixed left-20 ml-2 hidden group-hover:block z-50 px-2.5 py-1 text-xs font-semibold text-white bg-slate-900 border border-slate-700 rounded-md shadow-xl whitespace-nowrap pointer-events-none">
+                      {item.label}
+                    </div>
+                  )}
                 </Link>
               );
             })}

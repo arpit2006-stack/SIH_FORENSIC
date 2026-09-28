@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/context/SessionContext';
 import { apiClient } from '@/lib/apiClient';
-import { Puzzle, CheckCircle2, Cpu } from 'lucide-react';
+import { Puzzle, CheckCircle2, Cpu, ArrowRight } from 'lucide-react';
 
 export default function RecoveryProgressPage() {
   const router = useRouter();
@@ -20,7 +20,6 @@ export default function RecoveryProgressPage() {
   });
 
   useEffect(() => {
-    // Poll or simulate stages
     const t1 = setTimeout(() => {
       setProgress(50);
       setStage('Deterministic Magic-Byte Signature Analysis (JPEG/PDF)...');
@@ -57,23 +56,23 @@ export default function RecoveryProgressPage() {
   }, [activeJobId, setCarvedFiles]);
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-300">
+    <div className="w-full max-w-5xl mx-auto space-y-6 sm:space-y-8 animate-in fade-in duration-300 pb-12">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight text-slate-800">Carving Telemetry</h2>
-        <p className="text-slate-500 text-lg">Real-time neural stream reconstruction without filesystem metadata.</p>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">Carving Telemetry</h2>
+        <p className="text-slate-500 text-sm sm:text-base mt-1">Real-time neural stream reconstruction without filesystem metadata.</p>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-8 shadow-sm space-y-6">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-8 shadow-sm space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
           <div>
             <div className="text-xs uppercase font-mono text-slate-400 font-semibold">Carving Job ID</div>
-            <div className="text-lg font-mono font-bold text-slate-800">
+            <div className="text-base sm:text-lg font-mono font-bold text-slate-900 break-all">
               {activeJobId || 'CRV-AUTO-2026'}
             </div>
           </div>
-          <div className="text-right">
+          <div className="text-left sm:text-right">
             <div className="text-xs uppercase font-mono text-slate-400 font-semibold">Pipeline State</div>
-            <div className="text-sm font-semibold text-teal-700 flex items-center space-x-1 justify-end">
+            <div className="text-xs sm:text-sm font-semibold text-teal-700 flex items-center space-x-1 sm:justify-end">
               <Cpu className="w-4 h-4" />
               <span>ONNX CPU-First</span>
             </div>
@@ -82,9 +81,9 @@ export default function RecoveryProgressPage() {
 
         {/* Progress Bar */}
         <div className="space-y-2">
-          <div className="flex justify-between text-sm font-semibold">
-            <span className="text-slate-700">{stage}</span>
-            <span className="font-mono text-slate-900">{progress}%</span>
+          <div className="flex justify-between text-xs sm:text-sm font-semibold">
+            <span className="text-slate-700 truncate mr-2">{stage}</span>
+            <span className="font-mono text-slate-900 shrink-0">{progress}%</span>
           </div>
           <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
             <div
@@ -95,34 +94,34 @@ export default function RecoveryProgressPage() {
         </div>
 
         {/* Stream Metrics Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
-          <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
-            <div className="text-xs text-slate-500 mb-1">Blocks Analyzed</div>
-            <div className="text-lg font-bold text-slate-800 font-mono">{stats.blocks} (4KB each)</div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 pt-2">
+          <div className="p-3.5 sm:p-4 bg-slate-50 rounded-lg border border-slate-100">
+            <div className="text-[11px] text-slate-500 mb-1 font-semibold uppercase">Blocks Analyzed</div>
+            <div className="text-xs sm:text-sm font-bold text-slate-800 font-mono">{stats.blocks} (4KB Sectors)</div>
           </div>
-          <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
-            <div className="text-xs text-slate-500 mb-1">Orphan Fragments Resolved</div>
-            <div className="text-lg font-bold text-teal-700 font-mono">{stats.orphans} remaining</div>
+          <div className="p-3.5 sm:p-4 bg-slate-50 rounded-lg border border-slate-100">
+            <div className="text-[11px] text-slate-500 mb-1 font-semibold uppercase">Orphan Clusters</div>
+            <div className="text-xs sm:text-sm font-bold text-slate-800 font-mono">{stats.orphans} (Resolved)</div>
           </div>
-          <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
-            <div className="text-xs text-slate-500 mb-1">Reconstructed Streams</div>
-            <div className="text-lg font-bold text-slate-800 font-mono">{stats.streams} Streams</div>
+          <div className="p-3.5 sm:p-4 bg-slate-50 rounded-lg border border-slate-100">
+            <div className="text-[11px] text-slate-500 mb-1 font-semibold uppercase">Reassembled Streams</div>
+            <div className="text-xs sm:text-sm font-bold text-teal-700 font-mono">{stats.streams} Files Verified</div>
           </div>
         </div>
       </div>
 
-      <div className="flex justify-end pt-4">
+      <div className="flex justify-end pt-2">
         <button
           onClick={() => router.push('/recovery/results')}
           disabled={!isDone}
-          className={`px-8 py-3 font-semibold rounded-md transition-all duration-200 shadow-sm flex items-center space-x-2 ${
-            !isDone
-              ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-              : 'bg-teal-600 text-white hover:bg-teal-700 shadow-md active:scale-95'
+          className={`w-full sm:w-auto px-8 py-3 rounded-lg font-bold transition flex items-center justify-center space-x-2 text-sm ${
+            isDone
+              ? 'bg-teal-600 hover:bg-teal-700 text-white shadow-md active:scale-95'
+              : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
           }`}
         >
-          <CheckCircle2 className="w-5 h-5" />
-          <span>View Reassembled Evidence & Matrix S ➔</span>
+          <span>Examine Recovered Artifacts</span>
+          <ArrowRight className="w-4 h-4 ml-1" />
         </button>
       </div>
     </div>

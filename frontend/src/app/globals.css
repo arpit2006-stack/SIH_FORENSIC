@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  /* Variables kept for legacy fallback, though mostly replaced by standard Tailwind classes */
+  /* Variables kept for legacy fallback */
   --bg-primary: 248 250 252; /* slate-50 */
   --bg-surface: 255 255 255; /* white */
   --text-primary: 30 41 59; /* slate-800 */
@@ -18,4 +18,25 @@
 
 body {
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Custom subtle scrollbars for high-density tables and containers */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(241, 245, 249, 0.6);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.8);
 }

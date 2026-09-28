@@ -53,18 +53,25 @@ def generate_valid_pdf() -> bytes:
     )
     # Ensure it spans multiple blocks by adding metadata padding
     padding = b"6 0 obj\n<< /Note (" + (b"CLASSIFIED EVIDENCE RECORD " * 200) + b") >>\nendobj\n"
-    trailer = (
-        b"xref\n0 7\n"
-        b"0000000000 65535 f \n"
-        b"0000000010 00000 n \n"
-        b"0000000060 00000 n \n"
-        b"0000000120 00000 n \n"
-        b"0000000230 00000 n \n"
-        b"0000000460 00000 n \n"
-        b"0000000540 00000 n \n"
-        b"trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n5800\n%%EOF\n"
-    )
-    return pdf_content + padding + trailer
+    body = pdf_content + padding
+
+    # Real xref offsets, computed from the body rather than hardcoded. The previous
+    # version shipped invented offsets and `startxref 5800`, which points into the
+    # middle of the padding — pypdf reported "incorrect startxref pointer" and
+    # recovered only by rescanning. A ground-truth file that is itself malformed
+    # makes every fidelity measurement taken against it meaningless.
+    offsets = []
+    for n in range(1, 7):
+        p = body.find(b"\n%d 0 obj" % n)
+        offsets.append((p + 1) if p >= 0 else body.find(b"%d 0 obj" % n))
+    xref_off = len(body)
+
+    xref = b"xref\n0 7\n0000000000 65535 f \n"
+    for off in offsets:
+        xref += b"%010d 00000 n \n" % off
+    trailer = (xref + b"trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n"
+               + b"%d\n" % xref_off + b"%%EOF\n")
+    return body + trailer
 
 
 def generate_valid_zip() -> bytes:

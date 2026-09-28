@@ -94,8 +94,41 @@ def find_footer(block: bytes | np.ndarray, mime: str) -> int:
     return end
 
 
+def _continuity_ok(prev: bytes, nxt: bytes, mime: str, threshold: float) -> bool:
+    """Would `nxt` plausibly follow `prev` inside a `mime` stream?
+
+    Whole-stream C_struct cannot catch a swallowed foreign sector: for JPEG the
+    injected bytes just look like more entropy-coded scan data (measured
+    C_struct = 1.0000 on a stream with 12 KB of foreign filler), and for PDF the
+    obj/endobj counts still balance (measured 0.8901, over the 0.85 gate). Both
+    were emitted as valid, tying the naive header->footer baseline exactly.
+
+    Checking adjacency at carve time instead stops the stream at the contamination
+    boundary, so the real blocks reach the orphan pool where reassembly can
+    reorder them. Uses the same pairwise primitive the reassembler already relies on.
+
+    DEFAULT OFF (min_continuity=0.0) — measured, not assumed. On the `fragmented`
+    benchmark cell sht_pair_affinity does not separate the two populations:
+        true adjacencies     n=27  mean 0.8285  range 0.2702 .. 0.9984
+        contamination bounds n=6   mean 0.4478  range 0.2702 .. 0.8029
+    The ranges overlap, so no threshold exists. The cause is that the posterior
+    collapses to a few discrete levels: sht_pair_affinity has JPEG-specific
+    pairwise tests but none for PDF or ZIP, so those fall back to the generic
+    entropy/header/footer tests and every PDF boundary — real or contaminated —
+    returns the same 0.8029. Adding format-specific pairwise continuity tests for
+    PDF and ZIP is the prerequisite for turning this gate on; see bench/matrix.py.
+    """
+    if threshold <= 0.0:
+        return True
+    try:
+        from engine.carver_ml import sht_pair_affinity
+        return sht_pair_affinity(prev, nxt, mime) >= threshold
+    except Exception:
+        return True          # never let the gate turn a recoverable stream into a crash
+
+
 def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
-          max_stream_blocks: int = 1 << 16) -> CarveResult:
+          max_stream_blocks: int = 1 << 16, min_continuity: float = 0.0) -> CarveResult:
     """image: (N, 4096) uint8. noise_mask: optional bool[N] from FastBlockTriage (True = skip).
 
     Contiguity heuristic: a stream stays open while the next block is not a
@@ -153,6 +186,8 @@ def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
             )
             if j >= n or noise[j] or is_foreign_header or claimed[j]:
                 break
+            if not _continuity_ok(image[blocks[-1]].tobytes(), image[j].tobytes(), mime, min_continuity):
+                break          # contamination boundary: leave open, blocks fall through to orphans
             blocks.append(j)
         hoff = res.header_offsets.get(start, 0)
         stream = Stream(mime, blocks, closed, foff if closed else -1, header_offset=hoff)

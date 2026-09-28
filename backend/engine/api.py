@@ -294,9 +294,15 @@ class CarvingApiRouter:
         # Run Phase 2 Deterministic Signature Carving (FR2.0) with noise filtering
         carve_res = carve(image, noise_mask=noise_mask)
 
-        # FR2.0 -> FR2.1 Structural Coherence Validation Gate
+        # FR2.0 -> FR2.1 Structural Coherence Validation Gate.
+        # Demoted streams still feed the orphan pool for reassembly, but their straight
+        # assembly is kept as a fallback candidate rather than discarded: when reassembly
+        # produces a worse result than the contiguous carve (measured on the
+        # partial-overwrite benchmark cells), dropping the fallback meant shipping the
+        # worse one. Both are surfaced; the PARTIAL_UNVERIFIED label distinguishes them.
         valid_streams, orphan_indices = validate_carve(image, carve_res, min_struct=0.85)
-        carve_res.streams = valid_streams
+        demoted = [s for s in carve_res.streams if s not in valid_streams and s.closed]
+        carve_res.streams = valid_streams + demoted
         carve_res.orphans = orphan_indices
         job.orphans_count = len(carve_res.orphans)
 
@@ -312,12 +318,22 @@ class CarvingApiRouter:
             is_valid, reason = verify_carved_file(raw_data, stream.mime)
             score_res: ScoreBreakdown = self.scorer.score(data=raw_data, mime=stream.mime)
 
-            # Strict Rejection Gate: Discard unopenable, corrupted, or low-confidence files
-            if not is_valid or score_res.S < 0.65 or stream.mime == "application/octet-stream":
+            # Triage gate. Unidentifiable containers and empty carves are dropped outright;
+            # anything that carries a real signature is surfaced, but only a file that both
+            # opens cleanly AND scores above threshold may be labelled verified.
+            #
+            # The previous version `continue`d on every imperfect carve. Measured against a
+            # plain header->footer baseline on the fragmented/partial-overwrite benchmark
+            # cells, that silently emitted *nothing* where the naive tool surfaced a usable
+            # partial (baseline 0.347/0.455/0.475 vs ours 0.000) — the strictness made the
+            # pipeline net worse than the market baseline. An investigator is better served
+            # by a partial that is clearly labelled partial than by silence.
+            if stream.mime == "application/octet-stream":
                 continue
+            verified = bool(is_valid) and score_res.S >= 0.65
 
             sha = hashlib.sha256(raw_data).hexdigest()
-            prio = "HIGH" if score_res.S >= 0.75 else "MEDIUM"
+            prio = ("HIGH" if score_res.S >= 0.75 else "MEDIUM") if verified else "REVIEW"
 
             ext = stream.mime.split("/")[-1]
             if ext == "jpeg":
@@ -346,8 +362,8 @@ class CarvingApiRouter:
                     offset_bytes=start_offset,
                     filename=fname,
                     saved_path=str(saved_file.resolve()),
-                    is_verified=True,
-                    validation_status="OPEN_VERIFIED",
+                    is_verified=verified,
+                    validation_status="OPEN_VERIFIED" if verified else "PARTIAL_UNVERIFIED",
                 )
             )
             file_idx += 1
@@ -382,9 +398,12 @@ class CarvingApiRouter:
                             siamese=siamese,
                         )
 
-                        # Strict Rejection Gate: Discard unopenable or low-confidence reassembled files
-                        if not is_valid or score_res.S < 0.65:
-                            continue
+                        # Same triage gate as the straight-stream path: surface the carve,
+                        # but only label it verified when it opens cleanly and scores well.
+                        # A reassembled chain is ordered from real blocks but the ordering
+                        # itself can be wrong, so an unverified chain must never claim
+                        # OPEN_VERIFIED.
+                        verified = bool(is_valid) and score_res.S >= 0.65
 
                         sha = hashlib.sha256(raw_data).hexdigest()
                         mime_str = chain.mime
@@ -410,13 +429,13 @@ class CarvingApiRouter:
                                     "delta_ent": round(score_res.delta_ent, 3),
                                     "C_sem": round(score_res.C_sem, 3),
                                 },
-                                triage_priority="HIGH" if score_res.S >= 0.75 else "MEDIUM",
+                                triage_priority=("HIGH" if score_res.S >= 0.75 else "MEDIUM") if verified else "REVIEW",
                                 sha256=sha,
                                 offset_bytes=start_blk * BLOCK_SIZE,
                                 filename=fname,
                                 saved_path=str(saved_file.resolve()),
-                                is_verified=True,
-                                validation_status="OPEN_VERIFIED",
+                                is_verified=verified,
+                                validation_status="OPEN_VERIFIED" if verified else "PARTIAL_UNVERIFIED",
                             )
                         )
                         file_idx += 1

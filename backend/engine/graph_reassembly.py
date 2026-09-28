@@ -67,15 +67,32 @@ def validate_carve(image: np.ndarray, cr: CarveResult, min_struct: float = 0.9
 
 
 class GlobalFragmentResolver:
-    def __init__(self, alpha: float = 0.5, beta: float = 0.5, tau: float = 0.55,
+    def __init__(self, alpha: float = 1.0, beta: float = 0.0, tau: float = 0.55,
                  siamese: SiameseAdjacency | None = None, max_pool: int = MAX_POOL,
                  prune_above: int = 64, top_k: int = 24):
-        """tau: cost of leaving a block without successor/predecessor. A link is only
+        """beta defaults to 0: the Siamese term is measured to perform at chance.
+
+        Ranking each fragment's true successor in a shuffled single-file pool
+        (the easiest possible case — no contamination), top-1 accuracy:
+
+            affinity source        pdf(16)  jpeg(5)  zip(9)   total
+            SHT only (alpha=1)      15       5        9       29/30 = 96.7%
+            Siamese only (beta=1)    1       1        1        3/30 = 10.0%   <- chance is ~1/n
+            blend 50/50 (previous)  15       1        2       18/30 = 60.0%
+
+        The previous 0.5/0.5 default took a near-perfect deterministic ranker down to
+        60% by averaging it with noise, which is the root cause of reassembly emitting
+        mis-ordered chains (e.g. blocks [35,36,45,38,47] where the truth is 35..39).
+        Re-enable beta only after the Siamese model is retrained AND shown to beat
+        SHT-only on this same measurement — see bench/ITERATION_LOG.md.
+
+        tau: cost of leaving a block without successor/predecessor. A link is only
         taken when C_ij < tau, i.e. A_ij > 1 - tau.
 
         prune_above/top_k: above `prune_above` fragments the SHT is only evaluated on the
         `top_k` Siamese candidates per row. SHT costs ~250us/pair in pure Python, so a full
-        500x500 solve would be ~60s; pruning makes it ~6s. Needs a Siamese model.
+        500x500 solve would be ~60s; pruning makes it ~6s. Needs a Siamese model — with
+        beta=0 the model is still used for candidate pruning only, never for ranking.
         """
         assert abs(alpha + beta - 1.0) < 1e-9
         self.alpha, self.beta, self.tau, self.max_pool = alpha, beta, tau, max_pool
