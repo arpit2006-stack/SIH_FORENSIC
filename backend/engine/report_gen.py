@@ -39,8 +39,14 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _EXPECTED_ENTROPY: dict[str, float] = {
     "image/jpeg": 7.7,
+    "image/png": 7.8,
     "application/pdf": 6.5,
     "application/zip": 7.9,
+    "video/mp4": 7.8,
+    "video/x-msvideo": 7.5,
+    "video/x-matroska": 7.7,
+    "audio/wav": 5.5,
+    "audio/mpeg": 7.6,
     "text/plain": 4.5,
 }
 _DEFAULT_EXPECTED_ENTROPY = 6.0

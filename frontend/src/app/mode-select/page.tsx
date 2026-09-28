@@ -133,6 +133,7 @@ export default function ModeSelectPage() {
 
         {/* Recover & Carve (PS Req 3) */}
         <button
+          id="mode-recover-carve-btn"
           onClick={() => handleSelectMode('recovery', '/recovery/scan')}
           className="relative flex flex-col justify-between text-left p-6 sm:p-7 bg-white border border-slate-200 shadow-sm border-t-4 border-t-teal-500 rounded-xl group cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-slate-300"
         >

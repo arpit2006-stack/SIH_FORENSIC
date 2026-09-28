@@ -21,9 +21,53 @@ from engine.pretrain_utils import BLOCK_SIZE
 # mime -> (list of header magics at offset 0, footer magic searched anywhere in block)
 SIGNATURES: dict[str, tuple[list[bytes], bytes]] = {
     "image/jpeg": ([b"\xff\xd8\xff"], b"\xff\xd9"),
+    "image/png": ([b"\x89PNG\r\n\x1a\n"], b"IEND\xaeB`\x82"),
     "application/pdf": ([b"%PDF-"], b"%%EOF"),
     "application/zip": ([b"PK\x03\x04"], b"PK\x05\x06"),  # covers DOCX/XLSX/PPTX/JAR
+    "video/mp4": ([b"ftyp"], b"moov"),
+    "video/x-msvideo": ([b"RIFF"], b"movi"),
+    "video/x-matroska": ([b"\x1a\x45\xdf\xa3"], b"\x1a\x45\xdf\xa3"),
+    "audio/wav": ([b"RIFF"], b"data"),
+    "audio/mpeg": ([b"ID3\x03", b"ID3\x04", b"ID3\x02", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"], b"\xff\xfb"),
 }
+
+
+def match_header_at(b: bytes, mime: str) -> bool:
+    """Strictly validates format-specific magic bytes and internal box/chunk headers at offset 0."""
+    if mime == "image/jpeg":
+        return b.startswith(b"\xff\xd8\xff")
+    elif mime == "image/png":
+        return b.startswith(b"\x89PNG\r\n\x1a\n")
+    elif mime == "application/pdf":
+        return b.startswith(b"%PDF-")
+    elif mime == "application/zip":
+        return b.startswith(b"PK\x03\x04")
+    elif mime == "video/mp4":
+        # ISO Base Media File Format: [4 bytes size] ftyp [4 bytes brand]
+        if len(b) >= 12 and b[4:8] == b"ftyp":
+            brand = b[8:12]
+            return brand in (
+                b"isom", b"mp41", b"mp42", b"MSNV", b"isml", b"avc1",
+                b"qt  ", b"M4V ", b"dash", b"iso2", b"mp71", b"NDAS",
+            )
+        return False
+    elif mime == "video/x-msvideo":
+        # RIFF [4 bytes len] AVI 
+        return len(b) >= 12 and b.startswith(b"RIFF") and b[8:12] == b"AVI "
+    elif mime == "video/x-matroska":
+        # EBML header \x1a\x45\xdf\xa3
+        return b.startswith(b"\x1a\x45\xdf\xa3")
+    elif mime == "audio/wav":
+        # RIFF [4 bytes len] WAVE
+        return len(b) >= 12 and b.startswith(b"RIFF") and b[8:12] == b"WAVE"
+    elif mime == "audio/mpeg":
+        # ID3v2 tag or MPEG audio sync frame
+        if b.startswith(b"ID3\x03") or b.startswith(b"ID3\x04") or b.startswith(b"ID3\x02"):
+            return True
+        if len(b) >= 2 and (b[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")):
+            return True
+        return False
+    return False
 
 
 @dataclass
@@ -53,26 +97,32 @@ class CarveResult:
     header_offsets: dict[int, int] = field(default_factory=dict) # idx -> byte offset in block
 
 
-def detect_header(block: bytes | np.ndarray) -> str | None:
+def detect_header(block: bytes | np.ndarray, allowed_mimes: list[str] | set[str] | None = None) -> str | None:
     b = block.tobytes() if isinstance(block, np.ndarray) else block
-    for mime, (heads, _) in SIGNATURES.items():
-        if any(b.startswith(h) for h in heads):
+    active = [m for m in SIGNATURES if allowed_mimes is None or m in allowed_mimes]
+    for mime in active:
+        if match_header_at(b, mime):
             return mime
     return None
 
 
-def detect_header_offset(block: bytes | np.ndarray, sector_size: int = 512) -> tuple[str, int] | None:
+def detect_header_offset(
+    block: bytes | np.ndarray,
+    sector_size: int = 512,
+    allowed_mimes: list[str] | set[str] | None = None,
+) -> tuple[str, int] | None:
     """Byte-accurate detection for 512-byte sector-aligned or block-aligned file headers.
     Returns (mime, offset_in_block) or None. Prioritizes offset 0.
     """
     b = block.tobytes() if isinstance(block, np.ndarray) else block
-    for mime, (heads, _) in SIGNATURES.items():
-        if any(b.startswith(h) for h in heads):
+    active = [m for m in SIGNATURES if allowed_mimes is None or m in allowed_mimes]
+    for mime in active:
+        if match_header_at(b, mime):
             return mime, 0
     for off in range(sector_size, len(b), sector_size):
         sub = b[off:]
-        for mime, (heads, _) in SIGNATURES.items():
-            if any(sub.startswith(h) for h in heads):
+        for mime in active:
+            if match_header_at(sub, mime):
                 return mime, off
     return None
 
@@ -80,18 +130,66 @@ def detect_header_offset(block: bytes | np.ndarray, sector_size: int = 512) -> t
 def find_footer(block: bytes | np.ndarray, mime: str) -> int:
     """Byte offset just past the footer inside `block`, or -1."""
     b = block.tobytes() if isinstance(block, np.ndarray) else block
-    foot = SIGNATURES[mime][1]
-    pos = b.rfind(foot)
-    if pos < 0:
+    if mime not in SIGNATURES:
         return -1
-    end = pos + len(foot)
-    if mime == "application/zip":  # EOCD record is 22 bytes + optional comment (len at +20)
-        comment_len = int.from_bytes(b[pos + 20:pos + 22], "little") if pos + 22 <= len(b) else 0
-        end = min(pos + 22 + comment_len, len(b))
-    elif mime == "application/pdf":  # %%EOF is usually followed by \r\n or \n
+
+    if mime == "image/jpeg":
+        pos = b.rfind(b"\xff\xd9")
+        return pos + 2 if pos >= 0 else -1
+
+    elif mime == "image/png":
+        # PNG ends with 12-byte IEND chunk: 4 bytes len (00 00 00 00) + 'IEND' + 4 bytes CRC (\xaeB`\x82)
+        pos = b.rfind(b"IEND\xaeB`\x82")
+        if pos >= 0:
+            return pos + 8  # 'IEND' (4) + CRC (4)
+        return -1
+
+    elif mime == "application/pdf":
+        pos = b.rfind(b"%%EOF")
+        if pos < 0:
+            return -1
+        end = pos + 5
         while end < len(b) and b[end:end + 1] in (b"\r", b"\n"):
             end += 1
-    return end
+        return end
+
+    elif mime == "application/zip":
+        pos = b.rfind(b"PK\x05\x06")
+        if pos < 0:
+            return -1
+        comment_len = int.from_bytes(b[pos + 20:pos + 22], "little") if pos + 22 <= len(b) else 0
+        return min(pos + 22 + comment_len, len(b))
+
+    elif mime == "video/mp4":
+        for term in (b"moov", b"mdat"):
+            pos = b.rfind(term)
+            if pos >= 4:
+                box_len = int.from_bytes(b[pos - 4:pos], "big")
+                if 8 <= box_len <= 100_000_000:
+                    end = (pos - 4) + box_len
+                    if end <= len(b):
+                        return end
+                return pos + 4
+        return -1
+
+    elif mime in ("video/x-msvideo", "audio/wav"):
+        foot = SIGNATURES[mime][1]
+        pos = b.rfind(foot)
+        return pos + len(foot) if pos >= 0 else -1
+
+    elif mime == "video/x-matroska":
+        pos = b.rfind(b"\x1a\x45\xdf\xa3")
+        return pos + 4 if pos >= 0 else -1
+
+    elif mime == "audio/mpeg":
+        pos = b.rfind(b"\xff\xfb")
+        if pos >= 0:
+            return min(pos + 1152, len(b))
+        return -1
+
+    foot = SIGNATURES[mime][1]
+    pos = b.rfind(foot)
+    return pos + len(foot) if pos >= 0 else -1
 
 
 def _continuity_ok(prev: bytes, nxt: bytes, mime: str, threshold: float) -> bool:
@@ -127,9 +225,17 @@ def _continuity_ok(prev: bytes, nxt: bytes, mime: str, threshold: float) -> bool
         return True          # never let the gate turn a recoverable stream into a crash
 
 
-def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
-          max_stream_blocks: int = 1 << 16, min_continuity: float = 0.0) -> CarveResult:
+def carve(
+    image: np.ndarray,
+    noise_mask: np.ndarray | None = None,
+    max_stream_blocks: int = 1 << 16,
+    min_continuity: float = 0.0,
+    target_mimes: list[str] | None = None,
+) -> CarveResult:
     """image: (N, 4096) uint8. noise_mask: optional bool[N] from FastBlockTriage (True = skip).
+
+    target_mimes: optional list of MIME types to scan. If provided, strictly ignores
+    headers/footers of any other unselected types, bypassing unneeded compute.
 
     Contiguity heuristic: a stream stays open while the next block is not a
     header of any foreign type and (if provided) not flagged as noise. It closes on the
@@ -139,15 +245,19 @@ def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
     n = len(image)
     noise = noise_mask if noise_mask is not None else np.zeros(n, dtype=bool)
     res = CarveResult()
+
+    allowed_set = set(target_mimes) if target_mimes else None
+    active_mimes = [m for m in SIGNATURES if allowed_set is None or m in allowed_set]
+
     for i in range(n):
         if noise[i]:
             continue
-        hdr = detect_header_offset(image[i])
+        hdr = detect_header_offset(image[i], allowed_mimes=allowed_set)
         if hdr:
             mime, off = hdr
             res.header_blocks[i] = mime
             res.header_offsets[i] = off
-        for mime in SIGNATURES:
+        for mime in active_mimes:
             if find_footer(image[i], mime) >= 0:
                 res.footer_blocks.setdefault(i, mime)
 
@@ -159,23 +269,40 @@ def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
         closed, foff = False, -1
         j = start
         has_sos = (mime != "image/jpeg")
+
+        hoff = res.header_offsets.get(start, 0)
+        riff_total_bytes = None
+        if mime in ("audio/wav", "video/x-msvideo"):
+            start_bytes = image[start].tobytes()
+            if len(start_bytes) >= hoff + 8 and start_bytes[hoff:hoff + 4] == b"RIFF":
+                riff_total_bytes = int.from_bytes(start_bytes[hoff + 4 : hoff + 8], "little") + 8
+
         while len(blocks) <= max_stream_blocks:
             blk_bytes = image[j].tobytes()
-            if mime == "image/jpeg" and not has_sos:
-                if b"\xff\xda" in blk_bytes:
-                    has_sos = True
 
-            foff = -1
-            if has_sos:
-                foff = find_footer(blk_bytes, mime)
-                if mime == "image/jpeg" and foff >= 0:
-                    sos_pos = blk_bytes.rfind(b"\xff\xda")
-                    if sos_pos >= 0 and foff <= sos_pos + 2:
-                        foff = -1
+            if riff_total_bytes is not None:
+                accum_bytes = len(blocks) * BLOCK_SIZE - hoff
+                if accum_bytes >= riff_total_bytes:
+                    excess = accum_bytes - riff_total_bytes
+                    foff = BLOCK_SIZE - excess
+                    closed = True
+                    break
+            else:
+                if mime == "image/jpeg" and not has_sos:
+                    if b"\xff\xda" in blk_bytes:
+                        has_sos = True
 
-            if foff >= 0 and not (j == start and foff < len(SIGNATURES[mime][0][0]) + 4):
-                closed = True
-                break
+                foff = -1
+                if has_sos:
+                    foff = find_footer(blk_bytes, mime)
+                    if mime == "image/jpeg" and foff >= 0:
+                        sos_pos = blk_bytes.rfind(b"\xff\xda")
+                        if sos_pos >= 0 and foff <= sos_pos + 2:
+                            foff = -1
+
+                if foff >= 0 and not (j == start and foff < len(SIGNATURES[mime][0][0]) + 4):
+                    closed = True
+                    break
             j += 1
             # Stop if next block is out of bounds, noise, claimed, or a header of another file type.
             # For application/zip, internal file entries also start with PK\x03\x04, so only abort
@@ -183,13 +310,13 @@ def carve(image: np.ndarray, noise_mask: np.ndarray | None = None,
             is_foreign_header = (
                 j in res.header_blocks
                 and (mime != "application/zip" or res.header_blocks[j] != "application/zip")
+                and res.header_blocks[j] != mime
             )
             if j >= n or noise[j] or is_foreign_header or claimed[j]:
                 break
             if not _continuity_ok(image[blocks[-1]].tobytes(), image[j].tobytes(), mime, min_continuity):
                 break          # contamination boundary: leave open, blocks fall through to orphans
             blocks.append(j)
-        hoff = res.header_offsets.get(start, 0)
         stream = Stream(mime, blocks, closed, foff if closed else -1, header_offset=hoff)
         res.streams.append(stream)
         if closed:

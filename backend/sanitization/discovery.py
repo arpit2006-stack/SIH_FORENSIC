@@ -573,10 +573,35 @@ class DeviceDiscoveryManager:
         return devices
 
     def find_device_by_path(self, device_path: str) -> DeviceInfo | None:
-        """Locate a single device by its exact device path."""
-        for dev in self.discover_devices(include_mock=True):
-            if dev.device_path.lower() == device_path.lower():
+        """Locate a single device by exact path, drive letter (D:), volume path (\\\\.\\D:), or serial."""
+        if not device_path:
+            return None
+
+        norm_input = device_path.strip().replace("/", "\\").lower()
+        norm_input_clean = re.sub(r"\\+", r"\\", norm_input)
+        input_letter = norm_input_clean.rstrip(":\\").upper()
+
+        all_devs = self.discover_devices(include_mock=True)
+
+        # 1. Exact or normalized device_path match
+        for dev in all_devs:
+            dev_norm = dev.device_path.strip().replace("/", "\\").lower()
+            dev_norm_clean = re.sub(r"\\+", r"\\", dev_norm)
+            if dev_norm == norm_input or dev_norm_clean == norm_input_clean:
                 return dev
+
+        # 2. Match mount points / drive letters (e.g. "D:", "D:\", "D")
+        for dev in all_devs:
+            for mp in dev.mount_points:
+                mp_clean = mp.strip().rstrip(":\\").upper()
+                if mp_clean and mp_clean == input_letter:
+                    return dev
+
+        # 3. Match serial number
+        for dev in all_devs:
+            if dev.serial and dev.serial.strip().lower() == norm_input:
+                return dev
+
         return None
 
     def verify_identity_consistency(
@@ -590,22 +615,34 @@ class DeviceDiscoveryManager:
         """
         reasons: list[str] = []
 
-        if expected.device_path != re_discovered.device_path:
-            reasons.append(f"Device path changed: {expected.device_path} != {re_discovered.device_path}")
+        # Normalized path comparison
+        exp_clean = re.sub(r"\\+", r"\\", expected.device_path.strip().replace("/", "\\").lower())
+        rec_clean = re.sub(r"\\+", r"\\", re_discovered.device_path.strip().replace("/", "\\").lower())
+        if exp_clean != rec_clean:
+            # Check if one is a mount point of the other
+            matches_mount = any(
+                re.sub(r"\\+", r"\\", mp.strip().replace("/", "\\").lower()) in (exp_clean, rec_clean)
+                for mp in re_discovered.mount_points
+            )
+            if not matches_mount:
+                reasons.append(f"Device path changed: {expected.device_path} != {re_discovered.device_path}")
 
         # Serial number check
         if expected.serial and re_discovered.serial:
-            if expected.serial != re_discovered.serial:
+            if expected.serial.strip().lower() != re_discovered.serial.strip().lower():
                 reasons.append(f"Serial number mismatch: expected '{expected.serial}', got '{re_discovered.serial}'")
 
-        # Model check
+        # Model check (strip trailing mount annotations)
         if expected.model and re_discovered.model:
-            if expected.model != re_discovered.model:
+            exp_model = re.sub(r"\s*\([A-Za-z0-9_:\s,/.-]+\)$", "", expected.model.strip()).strip().lower()
+            rec_model = re.sub(r"\s*\([A-Za-z0-9_:\s,/.-]+\)$", "", re_discovered.model.strip()).strip().lower()
+            if exp_model != rec_model and exp_model not in rec_model and rec_model not in exp_model:
                 reasons.append(f"Model mismatch: expected '{expected.model}', got '{re_discovered.model}'")
 
-        # Capacity check
+        # Capacity check (allow 5% tolerance for metadata reservation differences)
         if expected.capacity_bytes > 0 and re_discovered.capacity_bytes > 0:
-            if expected.capacity_bytes != re_discovered.capacity_bytes:
+            diff = abs(expected.capacity_bytes - re_discovered.capacity_bytes)
+            if diff > (expected.capacity_bytes * 0.05):
                 reasons.append(
                     f"Capacity mismatch: expected {expected.capacity_bytes} bytes, got {re_discovered.capacity_bytes}"
                 )
@@ -618,3 +655,43 @@ class DeviceDiscoveryManager:
                 )
 
         return (len(reasons) == 0, reasons)
+
+    def revalidate_target(
+        self,
+        target_path: str,
+        expected_serial: str = "",
+        expected_capacity: int = 0,
+    ) -> tuple[bool, str, DeviceInfo | None]:
+        """Pre-execution anti-drive-swap target revalidation.
+
+        Directly queries the current storage bus state immediately prior to issuing
+        any destructive IOCTL command. Verifies that the device at `target_path` is present,
+        and that its serial number and capacity match the authorized target.
+        Prevents hot-swap or controller re-enumeration race conditions.
+
+        Returns (is_valid, reason_str, device_info_or_none).
+        """
+        dev = self.find_device_by_path(target_path)
+        if not dev:
+            return False, f"Target device '{target_path}' not found on storage bus immediately prior to execution.", None
+
+        if expected_serial:
+            clean_expected = expected_serial.strip().lower()
+            clean_actual = (dev.serial or "").strip().lower()
+            if clean_actual and clean_expected != clean_actual:
+                return (
+                    False,
+                    f"Serial mismatch: authorized '{expected_serial}', but bus device has '{dev.serial}' "
+                    f"(potential drive hot-swap / index shift).",
+                    dev,
+                )
+
+        if expected_capacity > 0 and dev.capacity_bytes > 0:
+            if dev.capacity_bytes != expected_capacity:
+                return (
+                    False,
+                    f"Capacity mismatch: authorized {expected_capacity} bytes, but bus device has {dev.capacity_bytes} bytes.",
+                    dev,
+                )
+
+        return True, "Device revalidation passed: target identity verified on storage bus.", dev

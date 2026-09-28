@@ -56,16 +56,40 @@ class SafetyGate:
             )
 
         # 2. Path verification
-        if auth.device_path.strip().lower() != device.device_path.strip().lower():
+        import re
+        auth_clean = re.sub(r"\\+", r"\\", auth.device_path.strip().replace("/", "\\").lower())
+        target_clean = re.sub(r"\\+", r"\\", device.device_path.strip().replace("/", "\\").lower())
+        path_matches = (auth_clean == target_clean)
+        if not path_matches:
+            # Check mount points (e.g. auth is "D:" or "\\.\D:")
+            auth_letter = auth_clean.rstrip(":\\").upper()
+            if auth_letter.startswith(r"\."):
+                auth_letter = auth_letter[2:].strip(":\\")
+            for mp in device.mount_points:
+                mp_letter = mp.strip().rstrip(":\\").upper()
+                if mp_letter and mp_letter == auth_letter:
+                    path_matches = True
+                    break
+        if not path_matches and auth.serial_confirmation and device.serial:
+            if auth.serial_confirmation.strip().lower() == device.serial.strip().lower():
+                path_matches = True
+
+        if not path_matches:
             raise SanitizationException(
                 SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
                 f"Authorized device path '{auth.device_path}' does not match target '{device.device_path}'.",
                 {"authorizedPath": auth.device_path, "targetPath": device.device_path},
             )
 
-        # 3. Model confirmation check
+        # 3. Model confirmation check (strips trailing mount labels e.g. "Generic Flash Disk (D:)")
         if device.model and auth.model_confirmation.strip():
-            if auth.model_confirmation.strip().lower() != device.model.strip().lower():
+            clean_confirm = re.sub(r"\s*\([A-Za-z0-9_:\s,/.-]+\)$", "", auth.model_confirmation.strip()).strip().lower()
+            clean_dev_model = re.sub(r"\s*\([A-Za-z0-9_:\s,/.-]+\)$", "", device.model.strip()).strip().lower()
+            if (
+                clean_confirm != clean_dev_model
+                and clean_confirm not in clean_dev_model
+                and clean_dev_model not in clean_confirm
+            ):
                 raise SanitizationException(
                     SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
                     f"Operator model confirmation '{auth.model_confirmation}' does not match actual hardware '{device.model}'.",
@@ -74,7 +98,9 @@ class SafetyGate:
 
         # 4. Serial confirmation check
         if device.serial and auth.serial_confirmation.strip():
-            if auth.serial_confirmation.strip().lower() != device.serial.strip().lower():
+            clean_auth_serial = auth.serial_confirmation.strip().lower()
+            clean_dev_serial = device.serial.strip().lower()
+            if clean_auth_serial != clean_dev_serial and clean_auth_serial not in clean_dev_serial:
                 raise SanitizationException(
                     SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
                     f"Operator serial confirmation '{auth.serial_confirmation}' does not match actual hardware '{device.serial}'.",
@@ -150,6 +176,21 @@ class SafetyGate:
 
         # Re-check mounted state
         if re_discovered.mounted:
+            if platform.system().lower() == "windows" and re_discovered.storage_type in (StorageType.USB, StorageType.UNKNOWN):
+                import subprocess
+                for mp in list(re_discovered.mount_points):
+                    drive_letter = mp.rstrip("\\")
+                    try:
+                        res = subprocess.run(["fsutil", "volume", "dismount", drive_letter], capture_output=True, text=True, timeout=5)
+                        if res.returncode == 0:
+                            if mp in re_discovered.mount_points:
+                                re_discovered.mount_points.remove(mp)
+                    except Exception:
+                        pass
+                if not re_discovered.mount_points:
+                    re_discovered.mounted = False
+
+        if re_discovered.mounted:
             raise SanitizationException(
                 SanitizationErrorCode.DEVICE_MOUNTED,
                 "Pre-execution re-check detected device has mounted partitions.",
@@ -158,7 +199,7 @@ class SafetyGate:
 
         # Verify serial consistency
         if initial_device.serial and re_discovered.serial:
-            if initial_device.serial != re_discovered.serial:
+            if initial_device.serial.strip().lower() != re_discovered.serial.strip().lower():
                 raise SanitizationException(
                     SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
                     f"Pre-execution re-check serial mismatch: '{initial_device.serial}' != '{re_discovered.serial}'",
@@ -167,7 +208,14 @@ class SafetyGate:
 
         # Verify model consistency
         if initial_device.model and re_discovered.model:
-            if initial_device.model != re_discovered.model:
+            import re
+            clean_initial = re.sub(r"\s*\([A-Za-z0-9_:\s,/.-]+\)$", "", initial_device.model.strip()).strip().lower()
+            clean_reval = re.sub(r"\s*\([A-Za-z0-9_:\s,/.-]+\)$", "", re_discovered.model.strip()).strip().lower()
+            if (
+                clean_initial != clean_reval
+                and clean_initial not in clean_reval
+                and clean_reval not in clean_initial
+            ):
                 raise SanitizationException(
                     SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
                     f"Pre-execution re-check model mismatch: '{initial_device.model}' != '{re_discovered.model}'",

@@ -4,7 +4,36 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/context/SessionContext';
 import { apiClient, CarvedFile } from '@/lib/apiClient';
-import { FileBadge, Download, CheckCircle2, ArrowLeft, ShieldCheck, Info, FileCode } from 'lucide-react';
+import { FileBadge, Download, CheckCircle2, ArrowLeft, ShieldCheck, Info, FileCode, Film, Music, Image as ImageIcon, FileText } from 'lucide-react';
+
+function getMimeBadge(mime: string) {
+  if (mime.startsWith('video/')) {
+    return {
+      icon: Film,
+      label: 'VIDEO',
+      color: 'bg-purple-50 text-purple-700 border-purple-200',
+    };
+  }
+  if (mime.startsWith('audio/')) {
+    return {
+      icon: Music,
+      label: 'AUDIO',
+      color: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+    };
+  }
+  if (mime.startsWith('image/')) {
+    return {
+      icon: ImageIcon,
+      label: 'IMAGE',
+      color: 'bg-blue-50 text-blue-700 border-blue-200',
+    };
+  }
+  return {
+    icon: FileText,
+    label: 'DOCUMENT',
+    color: 'bg-slate-100 text-slate-700 border-slate-200',
+  };
+}
 
 const FALLBACK_FILES: CarvedFile[] = [
   {
@@ -130,10 +159,24 @@ export default function RecoveryResultsPage() {
             <tbody className="divide-y divide-slate-100">
               {files.map((file) => {
                 const isSel = selectedFile?.file_id === file.file_id;
-                const fname = file.filename || `${file.file_id.toLowerCase()}.${file.mime.split('/')[1] === 'jpeg' ? 'jpg' : file.mime.split('/')[1]}`;
+                const ext = ({
+                  'image/jpeg': 'jpg',
+                  'image/png': 'png',
+                  'application/pdf': 'pdf',
+                  'application/zip': 'zip',
+                  'video/mp4': 'mp4',
+                  'video/x-msvideo': 'avi',
+                  'video/x-matroska': 'mkv',
+                  'audio/wav': 'wav',
+                  'audio/mpeg': 'mp3',
+                } as Record<string, string>)[file.mime] || 'bin';
+                const fname = file.filename || `${file.file_id.toLowerCase()}.${ext}`;
+                const badge = getMimeBadge(file.mime);
+                const BadgeIcon = badge.icon;
                 return (
                   <tr
                     key={file.file_id}
+                    id={`carved-row-${file.file_id}`}
                     onClick={() => setSelectedFile(file)}
                     className={`cursor-pointer transition-colors ${
                       isSel ? 'bg-teal-50/60 ring-1 ring-inset ring-teal-500/50' : 'hover:bg-slate-50/80'
@@ -143,7 +186,13 @@ export default function RecoveryResultsPage() {
                       {file.file_id}
                     </td>
                     <td className="px-4 py-3 text-slate-700 font-mono text-xs whitespace-nowrap">
-                      {file.mime}
+                      <div className="flex items-center space-x-1.5">
+                        <span className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-bold border ${badge.color}`}>
+                          <BadgeIcon className="w-3 h-3" />
+                          <span>{badge.label}</span>
+                        </span>
+                        <span className="text-slate-600">{file.mime}</span>
+                      </div>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-800 whitespace-nowrap">
                       {(file.size_bytes / 1024).toFixed(1)} KB ({file.block_count} blks)
@@ -166,6 +215,7 @@ export default function RecoveryResultsPage() {
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <a
+                        id={`download-file-btn-${file.file_id}`}
                         href={`http://127.0.0.1:8000/api/carving/download?file=${fname}`}
                         download={fname}
                         onClick={(e) => e.stopPropagation()}

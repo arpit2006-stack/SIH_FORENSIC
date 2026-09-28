@@ -37,6 +37,8 @@ interface SessionContextType {
   setLatestReport: (rep: any) => void;
   carvedFiles: any[];
   setCarvedFiles: (files: any[]) => void;
+  selectedMimes: string[];
+  setSelectedMimes: (mimes: string[]) => void;
   // Sidebar display state for responsive screen scaling
   sidebarCollapsed: boolean;
   setSidebarCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
@@ -56,6 +58,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [latestReport, setLatestReport] = useState<any>(null);
   const [carvedFiles, setCarvedFiles] = useState<any[]>([]);
+  const [selectedMimes, setSelectedMimes] = useState<string[]>(['images', 'documents', 'archives', 'video', 'audio']);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
 
   const toggleSidebar = () => setSidebarCollapsed(prev => !prev);
@@ -71,6 +74,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       activeJobId, setActiveJobId,
       latestReport, setLatestReport,
       carvedFiles, setCarvedFiles,
+      selectedMimes, setSelectedMimes,
       sidebarCollapsed, setSidebarCollapsed,
       toggleSidebar,
     }}>

@@ -5,14 +5,16 @@ import { useRouter } from 'next/navigation';
 import { useSession } from '@/context/SessionContext';
 import DriveSummaryCard from '@/components/DriveSummaryCard';
 import { apiClient } from '@/lib/apiClient';
-import { ShieldCheck, Cpu, Puzzle, Play, FileText, Image as ImageIcon, Archive, HardDrive, ArrowLeft } from 'lucide-react';
+import { ShieldCheck, Cpu, Puzzle, Play, FileText, Image as ImageIcon, Archive, HardDrive, ArrowLeft, Video, Music } from 'lucide-react';
 
 export default function RecoveryScanPage() {
   const router = useRouter();
-  const { selectedDrive, setSelectedDrive, caseId, investigatorName, setActiveJobId, setCarvedFiles } = useSession();
+  const { selectedDrive, setSelectedDrive, caseId, investigatorName, setActiveJobId, setCarvedFiles, selectedMimes, setSelectedMimes } = useSession();
 
   const [deepMl, setDeepMl] = useState<boolean>(true);
-  const [selectedFormats, setSelectedFormats] = useState<string[]>(['images', 'documents', 'archives']);
+  const [selectedFormats, setSelectedFormats] = useState<string[]>(
+    selectedMimes && selectedMimes.length > 0 ? selectedMimes : ['images', 'documents', 'archives', 'video', 'audio']
+  );
   const [isStarting, setIsStarting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -68,11 +70,14 @@ export default function RecoveryScanPage() {
     setIsStarting(true);
     setErrorMsg(null);
     try {
+      setSelectedMimes(selectedFormats);
       const resp = await apiClient.startCarving({
         targetPath: selectedDrive.devicePath || 'DEMO',
         caseId: caseId || 'CAS-2026-904',
         investigator: investigatorName || 'Insp. Rajesh Varma',
         deepMl: deepMl,
+        targetMimes: selectedFormats,
+        selectedFormats: selectedFormats,
       });
 
       if (resp?.jobId) {
@@ -139,7 +144,7 @@ export default function RecoveryScanPage() {
               <div>
                 <div className="font-bold text-slate-800 text-sm">Phase 2: Deterministic Magic-Byte Carving</div>
                 <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-                  Header/Footer boundary validation for JPEG, PDF, and ZIP container streams without OS metadata.
+                  Header/Footer boundary validation for JPEG, PNG, PDF, ZIP, MP4, AVI, MKV, and WAV container streams without OS metadata.
                 </div>
               </div>
             </label>
@@ -167,10 +172,11 @@ export default function RecoveryScanPage() {
         {/* Target Formats */}
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-            Target Container Formats
+            Target Container Formats (MIME Protocol Filter)
           </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <button
+              id="format-images-btn"
               type="button"
               onClick={() => toggleFormat('images')}
               className={`p-3.5 rounded-xl border text-left flex items-center space-x-3 transition ${
@@ -187,6 +193,7 @@ export default function RecoveryScanPage() {
             </button>
 
             <button
+              id="format-documents-btn"
               type="button"
               onClick={() => toggleFormat('documents')}
               className={`p-3.5 rounded-xl border text-left flex items-center space-x-3 transition ${
@@ -203,6 +210,7 @@ export default function RecoveryScanPage() {
             </button>
 
             <button
+              id="format-archives-btn"
               type="button"
               onClick={() => toggleFormat('archives')}
               className={`p-3.5 rounded-xl border text-left flex items-center space-x-3 transition ${
@@ -215,6 +223,40 @@ export default function RecoveryScanPage() {
               <div>
                 <div className="font-bold text-xs sm:text-sm">Archives</div>
                 <div className="text-[11px] text-slate-500 font-mono">ZIP / GZ</div>
+              </div>
+            </button>
+
+            <button
+              id="format-video-btn"
+              type="button"
+              onClick={() => toggleFormat('video')}
+              className={`p-3.5 rounded-xl border text-left flex items-center space-x-3 transition ${
+                selectedFormats.includes('video')
+                  ? 'border-teal-500 bg-teal-50/50 text-teal-900 ring-1 ring-teal-500'
+                  : 'border-slate-200 bg-white text-slate-600'
+              }`}
+            >
+              <Video className="w-5 h-5 text-teal-600 shrink-0" />
+              <div>
+                <div className="font-bold text-xs sm:text-sm">Video</div>
+                <div className="text-[11px] text-slate-500 font-mono">MP4 / AVI / MKV</div>
+              </div>
+            </button>
+
+            <button
+              id="format-audio-btn"
+              type="button"
+              onClick={() => toggleFormat('audio')}
+              className={`p-3.5 rounded-xl border text-left flex items-center space-x-3 transition ${
+                selectedFormats.includes('audio')
+                  ? 'border-teal-500 bg-teal-50/50 text-teal-900 ring-1 ring-teal-500'
+                  : 'border-slate-200 bg-white text-slate-600'
+              }`}
+            >
+              <Music className="w-5 h-5 text-teal-600 shrink-0" />
+              <div>
+                <div className="font-bold text-xs sm:text-sm">Audio</div>
+                <div className="text-[11px] text-slate-500 font-mono">WAV / MP3</div>
               </div>
             </button>
           </div>
@@ -237,6 +279,7 @@ export default function RecoveryScanPage() {
         </button>
 
         <button
+          id="engage-carving-btn"
           type="button"
           onClick={handleStartCarve}
           disabled={isStarting}

@@ -30,6 +30,7 @@ from sanitization.models import (
     SanitizationErrorCode,
     SanitizationException,
     SanitizeMethod,
+    parse_sanitize_method,
 )
 from sanitization.service import SanitizationOperationService
 
@@ -100,7 +101,7 @@ class SanitizationApiRouter:
                 if not dev_path:
                     return 400, {"status": "ERROR", "code": "INVALID_PARAM", "message": "devicePath is required"}
                 method_name = data.get("method")
-                selected_method = SanitizeMethod(method_name) if method_name else None
+                selected_method = parse_sanitize_method(method_name) if method_name else None
                 operator_id = data.get("operatorId", "OP-DRYRUN")
                 case_id = data.get("caseId", "CASE-DRYRUN")
                 dry_plan = self.service.execute_dry_run(

@@ -198,6 +198,19 @@ def validate_structural_coherence(data: bytes, mime: str) -> float:
         tests = _pdf_tests(data)
     elif mime == "application/zip":
         tests = _zip_tests(data)
+    elif mime == "audio/wav":
+        tests = [
+            (data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WAVE", *_P_HEADER),
+            (b"fmt " in data[:64], 0.99, 0.05),
+            (b"data" in data[:128], 0.99, 0.05),
+        ]
+    elif mime == "audio/mpeg":
+        has_id3 = data.startswith(b"ID3")
+        has_sync = (len(data) >= 2 and data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"))
+        tests = [
+            (has_id3 or has_sync, *_P_HEADER),
+            (len(data) >= 128, 0.95, 0.1),
+        ]
     else:  # unknown container: only entropy sanity
         h = calculate_shannon_entropy(data)
         tests = [(0.5 < h < 7.999, 0.9, 0.5)]

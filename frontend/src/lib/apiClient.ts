@@ -84,6 +84,7 @@ export interface CarvedFile {
 export interface CarvingJobResponse {
   status: string;
   jobId: string;
+  stage?: string;
   progress?: number;
   blocksScanned?: number;
   totalBlocks?: number;
@@ -204,6 +205,8 @@ class ForensiWipeClient {
     caseId: string;
     investigator: string;
     deepMl?: boolean;
+    targetMimes?: string[];
+    selectedFormats?: string[];
   }): Promise<{ status: string; jobId: string; job: any }> {
     return this.request("/api/carving/start", {
       method: "POST",

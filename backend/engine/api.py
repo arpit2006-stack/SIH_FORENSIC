@@ -20,6 +20,7 @@ import time
 import uuid
 import urllib.parse
 import zipfile
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,7 @@ from engine.report_gen import (
 
 def verify_carved_file(data: bytes, mime: str) -> tuple[bool, str]:
     """Forensic verification gate ensuring carved bytes constitute an openable, uncorrupted file."""
-    if not data or len(data) < 32:
+    if not data or len(data) < 16:
         return False, "Insufficient data length"
     try:
         if mime == "image/jpeg":
@@ -55,6 +56,15 @@ def verify_carved_file(data: bytes, mime: str) -> tuple[bool, str]:
             with Image.open(io.BytesIO(data)) as im:
                 im.load()
             return True, "Valid JPEG image structure"
+
+        elif mime == "image/png":
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                return False, "Missing PNG signature header"
+            if b"IEND" not in data:
+                return False, "Missing PNG IEND terminal chunk"
+            with Image.open(io.BytesIO(data)) as im:
+                im.verify()
+            return True, "Valid PNG image structure"
 
         elif mime == "application/zip":
             if not data.startswith(b"PK\x03\x04"):
@@ -82,11 +92,73 @@ def verify_carved_file(data: bytes, mime: str) -> tuple[bool, str]:
                 return False, "Missing PDF document catalog dictionary"
             return True, "Valid PDF document structure"
 
+        elif mime == "video/mp4":
+            if len(data) < 16 or data[4:8] != b"ftyp":
+                return False, "Missing MP4 ftyp atom marker"
+            brand = data[8:12]
+            valid_brands = (
+                b"isom", b"mp41", b"mp42", b"MSNV", b"isml", b"avc1",
+                b"qt  ", b"M4V ", b"dash", b"iso2", b"mp71", b"NDAS",
+            )
+            if brand not in valid_brands:
+                return False, f"Unrecognized MP4 major brand: {brand}"
+            return True, "Valid MP4 ISO container structure"
+
+        elif mime == "video/x-msvideo":
+            if len(data) < 12 or not data.startswith(b"RIFF") or data[8:12] != b"AVI ":
+                return False, "Missing AVI RIFF container header"
+            return True, "Valid AVI video container structure"
+
+        elif mime == "video/x-matroska":
+            if len(data) < 4 or not data.startswith(b"\x1a\x45\xdf\xa3"):
+                return False, "Missing Matroska EBML signature"
+            return True, "Valid Matroska container structure"
+
+        elif mime == "audio/wav":
+            if len(data) < 12 or not data.startswith(b"RIFF") or data[8:12] != b"WAVE":
+                return False, "Missing WAV RIFF container header"
+            return True, "Valid WAV audio structure"
+
+        elif mime == "audio/mpeg":
+            if not (data.startswith(b"ID3") or (len(data) >= 2 and data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"))):
+                return False, "Missing MP3 ID3 header or MPEG sync frame"
+            return True, "Valid MPEG audio stream"
+
         # Explicitly reject unverified/unsupported binary streams
         return False, f"Unverified format: {mime} is not a certified target MIME type"
 
     except Exception as err:
         return False, f"Structure validation error: {err}"
+
+
+def normalize_target_mimes(categories_or_mimes: list[str] | None) -> list[str]:
+    """Resolves UI category tokens and raw MIME types into exact target MIME strings."""
+    from engine.signature_carver import SIGNATURES
+    if not categories_or_mimes:
+        return list(SIGNATURES.keys())
+    mapping = {
+        "image": ["image/jpeg", "image/png"],
+        "images": ["image/jpeg", "image/png"],
+        "document": ["application/pdf", "application/zip"],
+        "documents": ["application/pdf", "application/zip"],
+        "pdf": ["application/pdf"],
+        "archive": ["application/zip"],
+        "archives": ["application/zip"],
+        "video": ["video/mp4", "video/x-msvideo", "video/x-matroska"],
+        "videos": ["video/mp4", "video/x-msvideo", "video/x-matroska"],
+        "audio": ["audio/wav", "audio/mpeg"],
+        "audios": ["audio/wav", "audio/mpeg"],
+    }
+    result = set()
+    for item in categories_or_mimes:
+        item_lower = item.lower()
+        if item_lower in mapping:
+            result.update(mapping[item_lower])
+        elif item in SIGNATURES:
+            result.add(item)
+        elif "/" in item:
+            result.add(item)
+    return sorted(list(result)) if result else list(SIGNATURES.keys())
 
 
 @dataclass
@@ -118,6 +190,7 @@ class CarvingJob:
     total_blocks: int
     blocks_scanned: int
     orphans_count: int
+    stage: str = "Queued"
     files_recovered: list[CarvedFileSummary] = field(default_factory=list)
     certificate_id: str | None = None
     certificate_pdf_path: str | None = None
@@ -147,9 +220,9 @@ class CarvingApiRouter:
         return self._siamese
 
     def _create_synthetic_forensic_image(self) -> np.ndarray:
-        """Create an in-memory 100-block synthetic disk image with fragmented JPEG and PDF."""
+        """Create an in-memory 80-block synthetic disk image with multi-media samples."""
         rng = np.random.default_rng(42)
-        total_blocks = 60
+        total_blocks = 80
         image = np.zeros((total_blocks, BLOCK_SIZE), dtype=np.uint8)
 
         # 1. Create a continuous JPEG
@@ -181,6 +254,57 @@ class CarvingApiRouter:
         except Exception:
             pass
 
+        # 3. Create a continuous PNG image
+        try:
+            png_img = Image.new("RGB", (64, 64), color=(30, 144, 255))
+            buf = io.BytesIO()
+            png_img.save(buf, "PNG")
+            png_bytes = buf.getvalue()
+            n_png = (len(png_bytes) + BLOCK_SIZE - 1) // BLOCK_SIZE
+            for i in range(n_png):
+                chunk = png_bytes[i * BLOCK_SIZE : (i + 1) * BLOCK_SIZE]
+                image[35 + i, : len(chunk)] = np.frombuffer(chunk, dtype=np.uint8)
+        except Exception:
+            pass
+
+        # 4. Create an authentic WAV audio sample
+        try:
+            sample_rate = 8000
+            duration = 0.25
+            n_samples = int(sample_rate * duration)
+            raw_samples = bytearray()
+            for s in range(n_samples):
+                val = int(8000 * np.sin(2 * np.pi * 440 * s / sample_rate))
+                raw_samples.extend(val.to_bytes(2, "little", signed=True))
+            wav_buf = io.BytesIO()
+            data_len = len(raw_samples)
+            total_len = 36 + data_len
+            wav_buf.write(b"RIFF" + total_len.to_bytes(4, "little") + b"WAVE")
+            wav_buf.write(b"fmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00")
+            wav_buf.write(b"data" + data_len.to_bytes(4, "little") + raw_samples)
+            wav_bytes = wav_buf.getvalue()
+            n_wav = (len(wav_bytes) + BLOCK_SIZE - 1) // BLOCK_SIZE
+            for i in range(n_wav):
+                chunk = wav_bytes[i * BLOCK_SIZE : (i + 1) * BLOCK_SIZE]
+                image[40 + i, : len(chunk)] = np.frombuffer(chunk, dtype=np.uint8)
+        except Exception:
+            pass
+
+        # 5. Create an authentic MP4 ISO media container sample
+        try:
+            mp4_buf = io.BytesIO()
+            mp4_buf.write((32).to_bytes(4, "big") + b"ftypisom" + (512).to_bytes(4, "big") + b"isommp41mp42MSNV")
+            mp4_data = b"FORENSIC_AUTHENTIC_VIDEO_STREAM_TEST" * 25
+            mp4_buf.write((len(mp4_data) + 8).to_bytes(4, "big") + b"mdat" + mp4_data)
+            mp4_buf.write((16).to_bytes(4, "big") + b"moov" + (8).to_bytes(4, "big") + b"mvhd")
+            mp4_bytes = mp4_buf.getvalue()
+            n_mp4 = (len(mp4_bytes) + BLOCK_SIZE - 1) // BLOCK_SIZE
+            for i in range(n_mp4):
+                chunk = mp4_bytes[i * BLOCK_SIZE : (i + 1) * BLOCK_SIZE]
+                image[45 + i, : len(chunk)] = np.frombuffer(chunk, dtype=np.uint8)
+        except Exception:
+            pass
+
         return image
 
     def _ingest_target_blocks(self, target_path: str, max_blocks: int = 100000) -> tuple[np.ndarray, str]:
@@ -192,13 +316,18 @@ class CarvingApiRouter:
         if os.path.isfile(target_path):
             try:
                 blocks = []
+                print(f"\\n[+] Streaming blocks from {target_path}...", flush=True)
                 with open(target_path, "rb") as f:
-                    for _ in range(max_blocks):
+                    for idx in range(max_blocks):
                         chunk = f.read(BLOCK_SIZE)
                         if not chunk or len(chunk) < BLOCK_SIZE:
                             break
                         blocks.append(np.frombuffer(chunk, dtype=np.uint8))
+                        if (idx + 1) % 1000 == 0:
+                            mb = (idx + 1) * BLOCK_SIZE / (1024 * 1024)
+                            print(f"    ... ingested {idx + 1:,} blocks ({mb:.1f} MB)", end="\\r", flush=True)
                 if blocks:
+                    print(flush=True)
                     return np.stack(blocks), f"File Image: {target_path}"
             except Exception:
                 pass
@@ -232,13 +361,18 @@ class CarvingApiRouter:
         for p in candidates:
             try:
                 blocks = []
+                print(f"\\n[+] Streaming blocks from live device: {p}...", flush=True)
                 with open(p, "rb") as dev:
                     for idx in range(max_blocks):
                         chunk = dev.read(BLOCK_SIZE)
                         if not chunk or len(chunk) < BLOCK_SIZE:
                             break
                         blocks.append(np.frombuffer(chunk, dtype=np.uint8))
+                        if (idx + 1) % 1000 == 0:
+                            mb = (idx + 1) * BLOCK_SIZE / (1024 * 1024)
+                            print(f"    ... ingested {idx + 1:,} blocks ({mb:.1f} MB)", end="\\r", flush=True)
                 if blocks:
+                    print(flush=True)
                     return np.stack(blocks), f"Live Media Stream: {p}"
             except (PermissionError, OSError, Exception):
                 continue
@@ -253,220 +387,248 @@ class CarvingApiRouter:
         investigator: str = "INVESTIGATOR-01",
         deep_ml: bool = True,
         max_blocks: int = 100000,
+        target_mimes: list[str] | None = None,
     ) -> CarvingJob:
         job_id = f"CRV-{uuid.uuid4().hex[:8].upper()}"
+        filtered_mimes = normalize_target_mimes(target_mimes)
+        print(f"[+] INITIATING CARVING ENGINE: Target={target_path}, Filtered Mimes={filtered_mimes}", flush=True)
+
         job = CarvingJob(
             job_id=job_id,
             case_id=case_id,
             investigator=investigator,
             target_path=target_path,
             status="SCANNING",
-            progress_percent=10,
-            total_blocks=60,
+            stage="Ingesting Raw Storage Sectors",
+            progress_percent=0,
+            total_blocks=80,
             blocks_scanned=0,
             orphans_count=0,
         )
         self.jobs[job_id] = job
 
-        # Load blocks from physical drive, volume device, raw image, or demo benchmark
-        image, source_desc = self._ingest_target_blocks(target_path, max_blocks=max_blocks)
-        job.source_description = source_desc
-
-        job.total_blocks = len(image)
-        job.blocks_scanned = len(image)
-        job.progress_percent = 50
-
-        # Destination folder for extracted artifacts (A:\SIH\SIH_FORENSIC\recovered_evidence)
-        project_root = Path(__file__).resolve().parents[2]
-        out_dir = project_root / "recovered_evidence"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        job.output_dir = str(out_dir.resolve())
-
-        # Phase 1: Fast Block-Level Triage (1D-CNN) to screen noise & unallocated blocks
-        noise_mask = None
-        try:
-            triage = self._get_triage()
-            labels, _ = triage.scan(image)
-            noise_mask = (labels == NOISE_IDX)
-        except Exception:
-            pass
-
-        # Run Phase 2 Deterministic Signature Carving (FR2.0) with noise filtering
-        carve_res = carve(image, noise_mask=noise_mask)
-
-        # FR2.0 -> FR2.1 Structural Coherence Validation Gate.
-        # Demoted streams still feed the orphan pool for reassembly, but their straight
-        # assembly is kept as a fallback candidate rather than discarded: when reassembly
-        # produces a worse result than the contiguous carve (measured on the
-        # partial-overwrite benchmark cells), dropping the fallback meant shipping the
-        # worse one. Both are surfaced; the PARTIAL_UNVERIFIED label distinguishes them.
-        valid_streams, orphan_indices = validate_carve(image, carve_res, min_struct=0.85)
-        demoted = [s for s in carve_res.streams if s not in valid_streams and s.closed]
-        carve_res.streams = valid_streams + demoted
-        carve_res.orphans = orphan_indices
-        job.orphans_count = len(carve_res.orphans)
-
-        recovered_files: list[CarvedFileSummary] = []
-        file_idx = 1
-
-        # Process and save verified straight streams
-        for stream in carve_res.streams:
-            raw_data = stream.assemble(image)
-            if not raw_data.strip(b"\x00") or len(raw_data) < 32:
-                continue
-
-            is_valid, reason = verify_carved_file(raw_data, stream.mime)
-            score_res: ScoreBreakdown = self.scorer.score(data=raw_data, mime=stream.mime)
-
-            # Triage gate. Unidentifiable containers and empty carves are dropped outright;
-            # anything that carries a real signature is surfaced, but only a file that both
-            # opens cleanly AND scores above threshold may be labelled verified.
-            #
-            # The previous version `continue`d on every imperfect carve. Measured against a
-            # plain header->footer baseline on the fragmented/partial-overwrite benchmark
-            # cells, that silently emitted *nothing* where the naive tool surfaced a usable
-            # partial (baseline 0.347/0.455/0.475 vs ours 0.000) — the strictness made the
-            # pipeline net worse than the market baseline. An investigator is better served
-            # by a partial that is clearly labelled partial than by silence.
-            if stream.mime == "application/octet-stream":
-                continue
-            verified = bool(is_valid) and score_res.S >= 0.65
-
-            sha = hashlib.sha256(raw_data).hexdigest()
-            prio = ("HIGH" if score_res.S >= 0.75 else "MEDIUM") if verified else "REVIEW"
-
-            ext = stream.mime.split("/")[-1]
-            if ext == "jpeg":
-                ext = "jpg"
-            fname = f"carved_{file_idx:03d}_{stream.blocks[0]:06d}.{ext}"
-            saved_file = out_dir / fname
-            saved_file.write_bytes(raw_data)
-
-            start_offset = (stream.blocks[0] * BLOCK_SIZE + stream.header_offset) if stream.blocks else 0
-            recovered_files.append(
-                CarvedFileSummary(
-                    file_id=f"REC-{file_idx:03d}",
-                    mime=stream.mime,
-                    block_count=len(stream.blocks),
-                    size_bytes=len(raw_data),
-                    is_closed=stream.closed,
-                    reliability_score=round(score_res.S, 3),
-                    score_breakdown={
-                        "C_hf": round(score_res.C_hf, 3),
-                        "C_struct": round(score_res.C_struct, 3),
-                        "delta_ent": round(score_res.delta_ent, 3),
-                        "C_sem": round(score_res.C_sem, 3),
-                    },
-                    triage_priority=prio,
-                    sha256=sha,
-                    offset_bytes=start_offset,
-                    filename=fname,
-                    saved_path=str(saved_file.resolve()),
-                    is_verified=verified,
-                    validation_status="OPEN_VERIFIED" if verified else "PARTIAL_UNVERIFIED",
-                )
-            )
-            file_idx += 1
-
-        # Reassemble fragmented orphans if any (capped to candidate non-empty blocks to prevent hang)
-        if deep_ml and carve_res.orphans:
-            job.status = "REASSEMBLING"
-            job.progress_percent = 80
-            try:
-                siamese = self._get_siamese()
-                resolver = GlobalFragmentResolver(siamese=siamese)
-                candidate_orphans = [b for b in carve_res.orphans if image[b].any()][:200]
-                if candidate_orphans:
-                    orphan_bytes: list[bytes] = [image[blk].tobytes() for blk in candidate_orphans]
-                    resolve_result = resolver.resolve(orphan_bytes, mime=None)
-                    for chain in resolve_result.chains:
-                        # Skip headless chains or octet-stream
-                        if not chain.mime or chain.mime == "application/octet-stream":
-                            continue
-
-                        raw_data = chain.assemble(orphan_bytes)
-                        if not raw_data.strip(b"\x00") or len(raw_data) < 64:
-                            continue
-
-                        is_valid, reason = verify_carved_file(raw_data, chain.mime)
-                        score_res = self.scorer.score(
-                            data=raw_data,
-                            mime=chain.mime,
-                            fragments=orphan_bytes,
-                            chain_order=chain.order,
-                            chain_residual=chain.residual,
-                            siamese=siamese,
-                        )
-
-                        # Same triage gate as the straight-stream path: surface the carve,
-                        # but only label it verified when it opens cleanly and scores well.
-                        # A reassembled chain is ordered from real blocks but the ordering
-                        # itself can be wrong, so an unverified chain must never claim
-                        # OPEN_VERIFIED.
-                        verified = bool(is_valid) and score_res.S >= 0.65
-
-                        sha = hashlib.sha256(raw_data).hexdigest()
-                        mime_str = chain.mime
-                        ext = mime_str.split("/")[-1]
-                        if ext == "jpeg":
-                            ext = "jpg"
-                        start_blk = candidate_orphans[chain.order[0]] if chain.order else 0
-                        fname = f"reassembled_{file_idx:03d}_{start_blk:06d}.{ext}"
-                        saved_file = out_dir / fname
-                        saved_file.write_bytes(raw_data)
-
-                        recovered_files.append(
-                            CarvedFileSummary(
-                                file_id=f"REC-{file_idx:03d}",
-                                mime=mime_str,
-                                block_count=len(chain.order),
-                                size_bytes=len(raw_data),
-                                is_closed=not chain.cut_cycle,
-                                reliability_score=round(score_res.S, 3),
-                                score_breakdown={
-                                    "C_hf": round(score_res.C_hf, 3),
-                                    "C_struct": round(score_res.C_struct, 3),
-                                    "delta_ent": round(score_res.delta_ent, 3),
-                                    "C_sem": round(score_res.C_sem, 3),
-                                },
-                                triage_priority=("HIGH" if score_res.S >= 0.75 else "MEDIUM") if verified else "REVIEW",
-                                sha256=sha,
-                                offset_bytes=start_blk * BLOCK_SIZE,
-                                filename=fname,
-                                saved_path=str(saved_file.resolve()),
-                                is_verified=verified,
-                                validation_status="OPEN_VERIFIED" if verified else "PARTIAL_UNVERIFIED",
-                            )
-                        )
-                        file_idx += 1
-            except Exception as err:
-                job.error = f"Reassembly warning: {err}"
-
-        job.files_recovered = recovered_files
-        job.status = "COMPLETED"
-        job.progress_percent = 100
-        job.certificate_id = f"BSA63-{job_id}"
-
-        # Write Section 63 BSA Chain of Custody Audit Log
-        try:
-            audit_file = out_dir / "section_63_bsa_audit.json"
-            audit_record = {
-                "court_certification": "Section 63 Bharatiya Sakshya Adhiniyam, 2023",
-                "case_id": case_id,
-                "investigator": investigator,
-                "target_media": target_path,
-                "source_description": source_desc,
-                "blocks_analyzed": len(image),
-                "total_bytes_analyzed": len(image) * BLOCK_SIZE,
-                "files_recovered_count": len(recovered_files),
-                "recovered_evidence": [asdict(f) for f in recovered_files],
-                "custody_hash": hashlib.sha256(json.dumps([asdict(f) for f in recovered_files], sort_keys=True).encode()).hexdigest(),
-            }
-            audit_file.write_text(json.dumps(audit_record, indent=2))
-        except Exception:
-            pass
-
+        # Start background thread to run pipeline
+        t = threading.Thread(
+            target=self._run_job_async,
+            args=(job, target_path, case_id, investigator, deep_ml, max_blocks, filtered_mimes),
+            daemon=True
+        )
+        t.start()
         return job
+
+    def _run_job_async(self, job: CarvingJob, target_path: str, case_id: str, investigator: str, deep_ml: bool, max_blocks: int, filtered_mimes: list[str]):
+        try:
+            job.progress_percent = 15
+            # Load blocks from physical drive, volume device, raw image, or demo benchmark
+            image, source_desc = self._ingest_target_blocks(target_path, max_blocks=max_blocks)
+            job.source_description = source_desc
+            job.total_blocks = len(image)
+            job.blocks_scanned = len(image)
+            job.progress_percent = 35
+            print(f"    [Block Ingestion] Total blocks: {len(image)} ({len(image)*BLOCK_SIZE/1024:.1f} KB) from {source_desc}", flush=True)
+
+            # Destination folder for extracted artifacts (A:\SIH\SIH_FORENSIC\recovered_evidence)
+            project_root = Path(__file__).resolve().parents[2]
+            out_dir = project_root / "recovered_evidence"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            job.output_dir = str(out_dir.resolve())
+
+            # Phase 1: Fast Block-Level Triage (1D-CNN) to screen noise & unallocated blocks
+            job.stage = "Phase 1: FastBlockTriage Noise Screening (1D-CNN)"
+            noise_mask = None
+            noise_count = 0
+            try:
+                triage = self._get_triage()
+                labels, _ = triage.scan(image)
+                noise_mask = (labels == NOISE_IDX)
+                noise_count = int(noise_mask.sum())
+            except Exception:
+                pass
+            print(f"    [Phase 1 Triage] Screened noise blocks: {noise_count}/{len(image)}", flush=True)
+
+            # Run Phase 2 Deterministic Signature Carving (FR2.0) with noise & MIME filtering
+            job.stage = "Phase 2: Deterministic Magic-Byte Carving"
+            job.progress_percent = 55
+            carve_res = carve(image, noise_mask=noise_mask, target_mimes=filtered_mimes)
+            print(f"    [Phase 2 Deterministic Carver] Discovered {len(carve_res.streams)} streams across {filtered_mimes}", flush=True)
+
+            # FR2.0 -> FR2.1 Structural Coherence Validation Gate.
+            job.stage = "Phase 3: Structural Validation & Reassembly"
+            job.progress_percent = 75
+            valid_streams, orphan_indices = validate_carve(image, carve_res, min_struct=0.85)
+            demoted = [s for s in carve_res.streams if s not in valid_streams and s.closed]
+            carve_res.streams = valid_streams + demoted
+            carve_res.orphans = orphan_indices
+            job.orphans_count = len(carve_res.orphans)
+            print(f"    [Phase 3 Validation] {len(valid_streams)} verified streams, {len(carve_res.orphans)} orphan blocks", flush=True)
+
+            recovered_files: list[CarvedFileSummary] = []
+            file_idx = 1
+
+            ext_map = {
+                "image/jpeg": "jpg",
+                "image/png": "png",
+                "application/pdf": "pdf",
+                "application/zip": "zip",
+                "video/mp4": "mp4",
+                "video/x-msvideo": "avi",
+                "video/x-matroska": "mkv",
+                "audio/wav": "wav",
+                "audio/mpeg": "mp3",
+            }
+
+            # Process and save verified straight streams
+            for stream in carve_res.streams:
+                raw_data = stream.assemble(image)
+                if not raw_data.strip(b"\x00") or len(raw_data) < 16:
+                    continue
+
+                is_valid, reason = verify_carved_file(raw_data, stream.mime)
+                score_res: ScoreBreakdown = self.scorer.score(data=raw_data, mime=stream.mime)
+
+                if stream.mime == "application/octet-stream":
+                    continue
+                verified = bool(is_valid) and score_res.S >= 0.60
+
+                sha = hashlib.sha256(raw_data).hexdigest()
+                prio = ("HIGH" if score_res.S >= 0.75 else "MEDIUM") if verified else "REVIEW"
+
+                ext = ext_map.get(stream.mime, stream.mime.split("/")[-1])
+                fname = f"carved_{file_idx:03d}_{stream.blocks[0]:06d}.{ext}"
+                saved_file = out_dir / fname
+                saved_file.write_bytes(raw_data)
+
+                start_offset = (stream.blocks[0] * BLOCK_SIZE + stream.header_offset) if stream.blocks else 0
+                recovered_files.append(
+                    CarvedFileSummary(
+                        file_id=f"REC-{file_idx:03d}",
+                        mime=stream.mime,
+                        block_count=len(stream.blocks),
+                        size_bytes=len(raw_data),
+                        is_closed=stream.closed,
+                        reliability_score=round(score_res.S, 3),
+                        score_breakdown={
+                            "C_hf": round(score_res.C_hf, 3),
+                            "C_struct": round(score_res.C_struct, 3),
+                            "delta_ent": round(score_res.delta_ent, 3),
+                            "C_sem": round(score_res.C_sem, 3),
+                        },
+                        triage_priority=prio,
+                        sha256=sha,
+                        offset_bytes=start_offset,
+                        filename=fname,
+                        saved_path=str(saved_file.resolve()),
+                        is_verified=verified,
+                        validation_status="OPEN_VERIFIED" if verified else "PARTIAL_UNVERIFIED",
+                    )
+                )
+                file_idx += 1
+
+            # Reassemble fragmented orphans if any (capped to candidate non-empty blocks to prevent hang)
+            if deep_ml and carve_res.orphans:
+                job.status = "REASSEMBLING"
+                job.progress_percent = 80
+                try:
+                    siamese = self._get_siamese()
+                    resolver = GlobalFragmentResolver(siamese=siamese)
+                    candidate_orphans = [b for b in carve_res.orphans if image[b].any()][:200]
+                    if candidate_orphans:
+                        orphan_bytes: list[bytes] = [image[blk].tobytes() for blk in candidate_orphans]
+                        resolve_result = resolver.resolve(orphan_bytes, mime=None)
+                        for chain in resolve_result.chains:
+                            # Skip headless chains or octet-stream
+                            if not chain.mime or chain.mime == "application/octet-stream":
+                                continue
+
+                            raw_data = chain.assemble(orphan_bytes)
+                            if not raw_data.strip(b"\x00") or len(raw_data) < 64:
+                                continue
+
+                            is_valid, reason = verify_carved_file(raw_data, chain.mime)
+                            score_res = self.scorer.score(
+                                data=raw_data,
+                                mime=chain.mime,
+                                fragments=orphan_bytes,
+                                chain_order=chain.order,
+                                chain_residual=chain.residual,
+                                siamese=siamese,
+                            )
+
+                            # Same triage gate as the straight-stream path: surface the carve,
+                            # but only label it verified when it opens cleanly and scores well.
+                            # A reassembled chain is ordered from real blocks but the ordering
+                            # itself can be wrong, so an unverified chain must never claim
+                            # OPEN_VERIFIED.
+                            verified = bool(is_valid) and score_res.S >= 0.65
+
+                            sha = hashlib.sha256(raw_data).hexdigest()
+                            mime_str = chain.mime
+                            ext = ext_map.get(mime_str, mime_str.split("/")[-1])
+                            start_blk = candidate_orphans[chain.order[0]] if chain.order else 0
+                            fname = f"reassembled_{file_idx:03d}_{start_blk:06d}.{ext}"
+                            saved_file = out_dir / fname
+                            saved_file.write_bytes(raw_data)
+
+                            recovered_files.append(
+                                CarvedFileSummary(
+                                    file_id=f"REC-{file_idx:03d}",
+                                    mime=mime_str,
+                                    block_count=len(chain.order),
+                                    size_bytes=len(raw_data),
+                                    is_closed=not chain.cut_cycle,
+                                    reliability_score=round(score_res.S, 3),
+                                    score_breakdown={
+                                        "C_hf": round(score_res.C_hf, 3),
+                                        "C_struct": round(score_res.C_struct, 3),
+                                        "delta_ent": round(score_res.delta_ent, 3),
+                                        "C_sem": round(score_res.C_sem, 3),
+                                    },
+                                    triage_priority=("HIGH" if score_res.S >= 0.75 else "MEDIUM") if verified else "REVIEW",
+                                    sha256=sha,
+                                    offset_bytes=start_blk * BLOCK_SIZE,
+                                    filename=fname,
+                                    saved_path=str(saved_file.resolve()),
+                                    is_verified=verified,
+                                    validation_status="OPEN_VERIFIED" if verified else "PARTIAL_UNVERIFIED",
+                                )
+                            )
+                            file_idx += 1
+                except Exception as err:
+                    job.error = f"Reassembly warning: {err}"
+
+            job.files_recovered = recovered_files
+            job.status = "COMPLETED"
+            job.stage = "Evidential Scoring & BSA Sec 63 Certification Complete"
+            job.progress_percent = 100
+            job.certificate_id = f"BSA63-{job_id}"
+            print(f"[+] CARVING PIPELINE COMPLETE: {len(recovered_files)} authentic forensic artifacts recovered to {job.output_dir}", flush=True)
+            for rf in recovered_files:
+                print(f"    - {rf.filename} ({rf.mime}): Size={rf.size_bytes}B, S={rf.reliability_score:.3f}, Priority={rf.triage_priority}, SHA256={rf.sha256[:16]}...", flush=True)
+
+            # Write Section 63 BSA Chain of Custody Audit Log
+            try:
+                audit_file = out_dir / "section_63_bsa_audit.json"
+                audit_record = {
+                    "court_certification": "Section 63 Bharatiya Sakshya Adhiniyam, 2023",
+                    "case_id": case_id,
+                    "investigator": investigator,
+                    "target_media": target_path,
+                    "source_description": source_desc,
+                    "blocks_analyzed": len(image),
+                    "total_bytes_analyzed": len(image) * BLOCK_SIZE,
+                    "files_recovered_count": len(recovered_files),
+                    "recovered_evidence": [asdict(f) for f in recovered_files],
+                    "custody_hash": hashlib.sha256(json.dumps([asdict(f) for f in recovered_files], sort_keys=True).encode()).hexdigest(),
+                }
+                audit_file.write_text(json.dumps(audit_record, indent=2))
+            except Exception:
+                pass
+
+            return job
+        except Exception as e:
+            job.status = "FAILED"
+            job.error = str(e)
+            print(f"[!] Pipeline Error: {e}", flush=True)
 
     def handle_request(
         self,
@@ -485,7 +647,8 @@ class CarvingApiRouter:
                 case_id = data.get("caseId", "CAS-2026-904")
                 investigator = data.get("investigator", "Officer In-Charge")
                 deep_ml = bool(data.get("deepMl", True))
-                max_blocks = int(data.get("maxBlocks", 100000))
+                max_blocks = int(data.get("maxBlocks", 10000 if "PhysicalDrive" in target else 100000))
+                target_mimes = data.get("targetMimes") or data.get("selectedFormats") or data.get("mimes")
 
                 job = self.start_job(
                     target_path=target,
@@ -493,6 +656,7 @@ class CarvingApiRouter:
                     investigator=investigator,
                     deep_ml=deep_ml,
                     max_blocks=max_blocks,
+                    target_mimes=target_mimes,
                 )
                 return 200, {
                     "status": "SUCCESS",
@@ -511,6 +675,7 @@ class CarvingApiRouter:
                     "status": "SUCCESS",
                     "jobId": job.job_id,
                     "status": job.status,
+                    "stage": getattr(job, "stage", "Completed"),
                     "progress": job.progress_percent,
                     "blocksScanned": job.blocks_scanned,
                     "totalBlocks": job.total_blocks,

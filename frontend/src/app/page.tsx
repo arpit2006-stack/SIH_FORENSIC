@@ -422,6 +422,7 @@ export default function DriveSelectionPage() {
                     return (
                       <tr 
                         key={drive.serial}
+                        id={`drive-row-${drive.serial}`}
                         onClick={() => setLocalSelectedDrive(drive)}
                         className={`cursor-pointer transition-colors duration-150 group ${
                           isSelected 
@@ -677,6 +678,7 @@ export default function DriveSelectionPage() {
           {/* Action Trigger */}
           <div className="flex items-center space-x-3 w-full sm:w-auto justify-end">
             <button
+              id="engage-target-btn"
               onClick={handleSelectDrive}
               disabled={isNextDisabled}
               className={`w-full sm:w-auto px-6 py-2.5 font-bold rounded-lg transition-all duration-200 shadow-sm flex items-center justify-center space-x-2 text-sm ${

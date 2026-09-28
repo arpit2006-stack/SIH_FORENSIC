@@ -11,10 +11,21 @@ export default function EraseConfirmPage() {
   const router = useRouter();
   const { selectedDrive, setSelectedDrive, caseId, investigatorName, setActiveOperationId, setLatestReport } = useSession();
 
-  const [method, setMethod] = useState<string>('NIST_SP_800_88_PURGE');
+  const isUsb = Boolean(
+    selectedDrive?.busType?.toUpperCase().includes('USB') ||
+    selectedDrive?.interfaceType?.toUpperCase().includes('USB')
+  );
+
+  const [method, setMethod] = useState<string>(isUsb ? 'NIST_SP_800_88_CLEAR' : 'NIST_SP_800_88_PURGE');
   const [passphrase, setPassphrase] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (isUsb) {
+      setMethod('NIST_SP_800_88_CLEAR');
+    }
+  }, [isUsb]);
 
   if (!selectedDrive) {
     return (
@@ -68,12 +79,14 @@ export default function EraseConfirmPage() {
 
     try {
       const devPath = selectedDrive.devicePath || `/dev/mock_${selectedDrive.serial.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      // Clean model name of any mount points (e.g. "Generic Flash Disk (D:)" -> "Generic Flash Disk")
+      const cleanModel = (selectedDrive.model || '').replace(/\s*\([A-Za-z0-9_:\s,/.-]+\)$/, '').trim();
       const resp = await apiClient.executeSanitization({
         devicePath: devPath,
         serial: selectedDrive.serial,
         serialConfirmation: selectedDrive.serial,
-        model: selectedDrive.model,
-        modelConfirmation: selectedDrive.model,
+        model: cleanModel || selectedDrive.model,
+        modelConfirmation: cleanModel || selectedDrive.model,
         method: method,
         selectedMethod: method,
         operatorId: investigatorName || 'OFFICER-DEFAULT',

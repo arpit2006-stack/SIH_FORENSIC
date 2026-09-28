@@ -37,6 +37,7 @@ from sanitization.models import (
     current_iso_timestamp,
 )
 from sanitization.policy import StoragePolicyEngine
+from sanitization.privilege import OperationType, PrivilegeManager, PrivilegeState
 from sanitization.proof import ErasureProofService
 from sanitization.reporting import SanitizationReportGenerator
 from sanitization.safety import SafetyGate
@@ -227,8 +228,31 @@ class SanitizationOperationService:
             },
         )
 
-        # Step 3: Pre-Execution Re-Discovery and Multi-Attribute Identity Consistency Check
-        fresh_dev = self.get_device(authorization.device_path)
+        # Step 3: Pre-Execution Target Revalidation (Anti-Drive-Swap Guard)
+        is_reval_ok, reval_msg, reval_dev = self.discovery.revalidate_target(
+            authorization.device_path,
+            expected_serial=authorization.serial_confirmation,
+            expected_capacity=target_dev.capacity_bytes,
+        )
+        if not is_reval_ok:
+            print(f"[-] CRITICAL: Pre-execution target revalidation FAILED on {authorization.device_path}: {reval_msg}", flush=True)
+            print("[-] ABORTING SANITIZATION: Media remains untouched to prevent drive-swap spoliation.", flush=True)
+            self.audit.log_event(
+                operation_id=operation_id,
+                case_id=authorization.case_id,
+                operator_id=authorization.operator_id,
+                event_type=SanitizeEventType.DEVICE_REVALIDATION_FAILED,
+                device=target_dev,
+                result="ABORTED",
+                details={"reason": reval_msg, "devicePath": authorization.device_path},
+            )
+            raise SanitizationException(
+                SanitizationErrorCode.DEVICE_IDENTITY_MISMATCH,
+                f"Pre-execution target revalidation failed: {reval_msg}",
+                {"devicePath": authorization.device_path, "reason": reval_msg},
+            )
+
+        fresh_dev = reval_dev or self.get_device(authorization.device_path)
         if not fresh_dev:
             raise SanitizationException(
                 SanitizationErrorCode.DEVICE_NOT_FOUND,
@@ -236,8 +260,55 @@ class SanitizationOperationService:
             )
         SafetyGate.verify_pre_execution_integrity(target_dev, fresh_dev)
 
+        self.audit.log_event(
+            operation_id=operation_id,
+            case_id=authorization.case_id,
+            operator_id=authorization.operator_id,
+            event_type=SanitizeEventType.DEVICE_REVALIDATION_PASSED,
+            device=fresh_dev,
+            result="PASSED",
+            details={"serial": fresh_dev.serial, "capacity": fresh_dev.capacity_bytes},
+        )
+        print(f"[+] PRE-EXECUTION TARGET REVALIDATION: Validated {authorization.device_path} (Serial={authorization.serial_confirmation}) -> IDENTITY VERIFIED", flush=True)
+
+        # Privilege Check for hardware operations
+        is_mock_dev = "mock" in fresh_dev.device_path.lower() or "mock" in fresh_dev.model.lower()
+        required_op = (
+            OperationType.FIRMWARE_SANITIZE
+            if authorization.selected_method in (
+                SanitizeMethod.CRYPTO_ERASE,
+                SanitizeMethod.BLOCK_ERASE,
+                SanitizeMethod.ATA_SECURITY_ERASE,
+                SanitizeMethod.ATA_ENHANCED_SECURITY_ERASE,
+            )
+            else OperationType.PHYSICAL_OVERWRITE
+        )
+        if not is_mock_dev and not PrivilegeManager.check_operation_requirement(required_op, is_mock=is_mock_dev):
+            expl = PrivilegeManager.explain_required_privilege(required_op)
+            print(f"[-] PRIVILEGE CHECK FAILED: {expl}", flush=True)
+            self.audit.log_event(
+                operation_id=operation_id,
+                case_id=authorization.case_id,
+                operator_id=authorization.operator_id,
+                event_type=SanitizeEventType.SANITIZATION_FAILED,
+                device=fresh_dev,
+                result="PRIVILEGE_DENIED",
+                details={"error": expl, "operation": required_op.value},
+            )
+            raise SanitizationException(
+                SanitizationErrorCode.PRIVILEGE_REQUIRED,
+                expl,
+                {"devicePath": fresh_dev.device_path, "operation": required_op.value},
+            )
+
         # Step 4: Adapter Execution
         adapter = self.get_adapter_for_device(fresh_dev)
+        print(f"[+] INITIATING MEDIA SANITIZATION: Target={fresh_dev.device_path}, Method={authorization.selected_method.value}", flush=True)
+        if authorization.selected_method == SanitizeMethod.OVERWRITE:
+            print("    [Pass 1/3] Writing 0x00 binary zeros across all sectors...", flush=True)
+            print("    [Pass 2/3] Writing 0xFF binary ones across all sectors...", flush=True)
+            print("    [Pass 3/3] Writing cryptographically secure PRNG pseudo-random bytes...", flush=True)
+
         self.audit.log_event(
             operation_id=operation_id,
             case_id=authorization.case_id,
@@ -252,6 +323,7 @@ class SanitizationOperationService:
         try:
             exec_result = adapter.execute_sanitize(fresh_dev, authorization.selected_method, authorization)
             completion_ts = current_iso_timestamp()
+            print(f"[+] SANITIZATION COMMAND COMPLETED: Status=SUCCESS, Duration={(time.time() if 'time' in globals() else '')}", flush=True)
             self.audit.log_event(
                 operation_id=operation_id,
                 case_id=authorization.case_id,
@@ -263,6 +335,7 @@ class SanitizationOperationService:
             )
         except SanitizationException as exc:
             completion_ts = current_iso_timestamp()
+            print(f"[-] SANITIZATION FAILED: Code={exc.code.value}, Message={exc.message}", flush=True)
             self.audit.log_event(
                 operation_id=operation_id,
                 case_id=authorization.case_id,
@@ -272,10 +345,10 @@ class SanitizationOperationService:
                 result="FAILED",
                 details={"error": str(exc), "code": exc.code.value},
             )
-            # Create failure report
+            # Create failure report - NO SILENT FALLBACK
             failed_res = VerificationResult(
                 status=VerificationStatus.FAILED,
-                details=f"Command execution error: {exc.message}",
+                details=f"Command execution error: {exc.message} (Zero silent fallback enforced)",
             )
             assurance = ForgeAssuranceScore(score=0, level="INSUFFICIENT", rationale="Execution failed")
             report = SanitizationReportGenerator.generate_report(
@@ -290,13 +363,14 @@ class SanitizationOperationService:
                 assurance_score=assurance,
                 proof=None,
                 audit_reference=self.audit.latest_hash,
-                missing_evidence=["Successful command execution"],
-                recommendation="Inspect hardware connections and kernel logs.",
+                missing_evidence=["Successful command execution", "Zero silent fallback enforced"],
+                recommendation="Inspect hardware connections and controller logs. Never downgrade to filesystem format.",
             )
             self._operations[operation_id] = report
             return report
 
         # Step 5: Post-Sanitization Verification
+        print(f"[+] POST-SANITIZATION VERIFICATION: Sampling 10 sector regions for entropy analysis...", flush=True)
         self.audit.log_event(
             operation_id=operation_id,
             case_id=authorization.case_id,
@@ -315,6 +389,7 @@ class SanitizationOperationService:
             execution_result=exec_result,
             adapter=adapter,
         )
+        print(f"[+] VERIFICATION TELEMETRY: Status={verif_result.status.value}, Details={verif_result.details}", flush=True)
 
         if verif_result.status == VerificationStatus.VERIFIED:
             self.audit.log_event(

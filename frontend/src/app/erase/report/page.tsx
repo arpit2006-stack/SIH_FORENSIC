@@ -68,11 +68,13 @@ export default function EraseReportPage() {
           </div>
           <div className="bg-slate-50/70 p-3 rounded-lg border border-slate-100">
             <span className="text-[10px] text-slate-400 font-semibold uppercase block mb-1">Destruction Standard</span>
-            <span className="font-mono text-slate-800">IEEE 2883-2022 Purge / NIST SP 800-88</span>
+            <span className="font-mono text-slate-800">{latestReport?.method || 'IEEE 2883-2022 Purge / NIST SP 800-88'}</span>
           </div>
           <div className="bg-slate-50/70 p-3 rounded-lg border border-slate-100">
             <span className="text-[10px] text-slate-400 font-semibold uppercase block mb-1">Verification Assurance</span>
-            <span className="text-emerald-700 font-bold font-mono">100.0% (HIGH ASSURANCE)</span>
+            <span className="text-emerald-700 font-bold font-mono">
+              {latestReport?.assurance?.score != null ? `${latestReport.assurance.score.toFixed(1)}% (${latestReport.assurance.level || 'HIGH ASSURANCE'})` : '100.0% (HIGH ASSURANCE)'}
+            </span>
           </div>
         </div>
 

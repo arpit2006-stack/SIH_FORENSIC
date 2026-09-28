@@ -31,6 +31,32 @@ class SanitizeMethod(str, Enum):
     UNSUPPORTED = "UNSUPPORTED"
 
 
+def parse_sanitize_method(method_raw: str | None) -> SanitizeMethod:
+    """Safely parse sanitization method enum from string or NIST standard UI aliases."""
+    if not method_raw:
+        return SanitizeMethod.UNSUPPORTED
+    m = str(method_raw).strip().upper()
+    METHOD_ALIASES: dict[str, SanitizeMethod] = {
+        "NIST_SP_800_88_CLEAR": SanitizeMethod.OVERWRITE,
+        "NIST_CLEAR": SanitizeMethod.OVERWRITE,
+        "CLEAR": SanitizeMethod.OVERWRITE,
+        "OVERWRITE": SanitizeMethod.OVERWRITE,
+        "NIST_SP_800_88_PURGE": SanitizeMethod.CRYPTO_ERASE,
+        "NIST_PURGE": SanitizeMethod.CRYPTO_ERASE,
+        "PURGE": SanitizeMethod.CRYPTO_ERASE,
+        "CRYPTO_ERASE": SanitizeMethod.CRYPTO_ERASE,
+        "BLOCK_ERASE": SanitizeMethod.BLOCK_ERASE,
+        "ATA_SECURE_ERASE": SanitizeMethod.ATA_SECURITY_ERASE,
+        "ATA_ENHANCED_SECURITY_ERASE": SanitizeMethod.ATA_ENHANCED_SECURITY_ERASE,
+    }
+    if m in METHOD_ALIASES:
+        return METHOD_ALIASES[m]
+    try:
+        return SanitizeMethod(m)
+    except ValueError:
+        return SanitizeMethod.UNSUPPORTED
+
+
 class AssuranceLevel(str, Enum):
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
@@ -55,6 +81,8 @@ class SanitizeEventType(str, Enum):
     SANITIZATION_PLANNED = "SANITIZATION_PLANNED"
     DRY_RUN_EXECUTED = "DRY_RUN_EXECUTED"
     AUTHORIZATION_GRANTED = "AUTHORIZATION_GRANTED"
+    DEVICE_REVALIDATION_PASSED = "DEVICE_REVALIDATION_PASSED"
+    DEVICE_REVALIDATION_FAILED = "DEVICE_REVALIDATION_FAILED"
     SANITIZATION_STARTED = "SANITIZATION_STARTED"
     SANITIZATION_COMPLETED = "SANITIZATION_COMPLETED"
     SANITIZATION_FAILED = "SANITIZATION_FAILED"
@@ -66,6 +94,7 @@ class SanitizeEventType(str, Enum):
 
 class SanitizationErrorCode(str, Enum):
     DEVICE_IDENTITY_MISMATCH = "DEVICE_IDENTITY_MISMATCH"
+    DEVICE_REVALIDATION_FAILED = "DEVICE_REVALIDATION_FAILED"
     DEVICE_IS_SYSTEM_DISK = "DEVICE_IS_SYSTEM_DISK"
     DEVICE_MOUNTED = "DEVICE_MOUNTED"
     AUTHORIZATION_REQUIRED = "AUTHORIZATION_REQUIRED"
@@ -238,11 +267,8 @@ class SafetyAuthorization:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SafetyAuthorization:
-        method_str = data.get("selectedMethod") or data.get("method") or SanitizeMethod.UNSUPPORTED.value
-        try:
-            selected_method = SanitizeMethod(method_str)
-        except ValueError:
-            selected_method = SanitizeMethod.UNSUPPORTED
+        method_raw = str(data.get("selectedMethod") or data.get("method") or "").strip()
+        selected_method = parse_sanitize_method(method_raw)
 
         explicit_destructive = bool(
             data.get("explicitDestructiveConfirmation")
